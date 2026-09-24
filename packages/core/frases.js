@@ -21,6 +21,8 @@ const NOMES_TECLA = {
 };
 
 const normalizarEspacos = (texto) => String(texto ?? '').replace(/\s+/g, ' ').trim();
+// «» delimitam o alvo na frase (e o negrito no Notion): dentro do alvo viram ‹›, senão o par fecha cedo
+const semAspasDoAlvo = (texto) => texto.replace(/«/g, '‹').replace(/»/g, '›');
 
 /** @returns {string} texto normalizado (espaços colapsados) cortado em max-1 + '…' */
 export function truncar(texto, max) {
@@ -33,15 +35,16 @@ export function truncar(texto, max) {
 /** Rótulo pronto para a frase: sem quebras, sem ":" ou "*" finais de formulário, ≤ 60 chars. '' quando não há. */
 function rotulo(texto) {
   let t = normalizarEspacos(texto);
-  t = t.replace(/^[«"“]+|[»"”]+$/g, '');   // evita «« »» quando o rótulo já vem entre aspas
-  t = t.replace(/[\s:*]+$/g, '');           // "Nome:" / "Nome *" → "Nome"
-  return truncar(t, LIMITE_ROTULO);
+  t = t.replace(/^[«"“]+(.*?)[»"”]+$/, '$1');   // evita «« »» quando o rótulo inteiro já vem entre aspas
+  t = t.replace(/[\s:*]+$/g, '');               // "Nome:" / "Nome *" → "Nome"
+  return truncar(semAspasDoAlvo(t), LIMITE_ROTULO);
 }
 
-/** @returns {string} host+caminho sem protocolo, www., query e fragmento; ≤ 60 chars */
+/** @returns {string} host+caminho sem protocolo, credenciais, www., query e fragmento; ≤ 60 chars */
 export function abreviarUrl(url) {
   let u = normalizarEspacos(url);
   u = u.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  u = u.replace(/^[^/?#@]*@/, '');            // usuario:senha@ nunca vai para o título
   u = u.replace(/^www\./i, '');
   u = u.replace(/[?#].*$/s, '');
   try { u = decodeURI(u); } catch { /* mantém codificado se inválido */ }
@@ -128,7 +131,7 @@ function tituloDigitar(alvo, evento) {
     if (ehSenha(alvo, evento)) return campo ? `Digite sua senha no campo «${campo}»` : 'Digite sua senha';
     return campo ? `Preencha o campo «${campo}»` : 'Preencha o campo';
   }
-  const valor = evento.valor == null ? '' : truncar(String(evento.valor), LIMITE_VALOR);
+  const valor = evento.valor == null ? '' : truncar(semAspasDoAlvo(String(evento.valor)), LIMITE_VALOR);
   if (!valor) return campo ? `Preencha o campo «${campo}»` : 'Preencha o campo';
   return campo ? `Digite «${valor}» no campo «${campo}»` : `Digite «${valor}»`;
 }

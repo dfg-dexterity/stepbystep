@@ -9,6 +9,7 @@ import { anotacoesAutomaticas } from './anotacoes.js';
 const JANELA_DUPLO_CLIQUE = 400;          // ms entre dois cliques no mesmo alvo
 const JANELA_GATILHO = 2000;              // ms entre clique/Enter e a navegação que ele disparou
 const JANELA_GATILHO_TRANSICAO = 30000;   // ms para link/form_submit (POST lento, redirecionamento no servidor)
+const MEMORIA_ENTRADAS = 8;               // entradas recentes lembradas para descartar o reenvio do content script
 const PAPEIS_MARCAR = new Set(['checkbox', 'radio', 'switch']);
 const TRANSICOES_GATILHO = new Set(['link', 'form_submit']);
 
@@ -16,10 +17,12 @@ const TRANSICOES_GATILHO = new Set(['link', 'form_submit']);
  * `sensiveis`: regiões (CSS px do viewport + scroll do frame) dos campos sensíveis já digitados, por url da página;
  * todo passo seguinte fotografado na mesma url recebe um `desfoque` auto sobre cada uma (o valor continua no campo).
  * @typedef {{url:string, frameId:number, seletor:string|null, rectCss:{x:number,y:number,w:number,h:number}, scroll:{x:number,y:number}}} RegiaoSensivel
- * @returns {{contador:number, urlAtual:string|null, ultimoClique:object|null, ultimoGatilho:object|null, ultimaEntrada:object|null, sensiveis:RegiaoSensivel[]}}
+ * `ultimasEntradas`: as últimas entradas reduzidas (tipo + em + seletor), da mais antiga à mais recente; `ultimaEntrada` é a
+ * última delas (o SW a consulta antes de fotografar).
+ * @returns {{contador:number, urlAtual:string|null, ultimoClique:object|null, ultimoGatilho:object|null, ultimaEntrada:object|null, ultimasEntradas:object[], sensiveis:RegiaoSensivel[]}}
  */
 export function criarEstadoRedutor(urlInicial = null) {
-  return { contador: 0, urlAtual: urlInicial, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: null, sensiveis: [] };
+  return { contador: 0, urlAtual: urlInicial, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: null, ultimasEntradas: [], sensiveis: [] };
 }
 
 function mapearTransicao(t) {
@@ -170,16 +173,19 @@ function passoDigitar(estado, payload, captura, confirmadoPor, opcoes) {
 export function reduzir(estado, entrada, opcoes = {}) {
   const s = structuredClone(estado ?? criarEstadoRedutor());
   if (!Array.isArray(s.sensiveis)) s.sensiveis = []; // estado gravado por versão anterior
+  if (!Array.isArray(s.ultimasEntradas)) s.ultimasEntradas = s.ultimaEntrada ? [s.ultimaEntrada] : [];
   const acoes = [];
   const em = entrada.em ?? Date.now();
   const mensagem = entrada.mensagem ?? {};
 
-  // reenvio do content script após falha do SW: mesma entrada (tipo + em + seletor) é descartada
+  // reenvio do content script após falha do SW: mesma entrada (tipo + em + seletor) é descartada. Não basta olhar a
+  // última entrada: entre o original e o reenvio podem chegar SPA (síncrono ao pushState), NAVEGACAO ou TECLA de outro frame.
   const seletor = mensagem.alvo?.seletor ?? null;
-  if (s.ultimaEntrada && s.ultimaEntrada.tipo === entrada.tipo && s.ultimaEntrada.em === em && mesmoSeletor(s.ultimaEntrada.seletor, seletor)) {
+  if (s.ultimasEntradas.some((u) => u.tipo === entrada.tipo && u.em === em && mesmoSeletor(u.seletor, seletor))) {
     return { estado: s, acoes };
   }
   s.ultimaEntrada = { tipo: entrada.tipo, em, seletor };
+  s.ultimasEntradas = [...s.ultimasEntradas.slice(1 - MEMORIA_ENTRADAS), s.ultimaEntrada];
 
   switch (entrada.tipo) {
     case 'PRE_CLIQUE': {
@@ -190,8 +196,9 @@ export function reduzir(estado, entrada, opcoes = {}) {
       }
       const alvo = mensagem.alvo ?? {};
       const url = mensagem.url ?? s.urlAtual;
+      // um segundo clique real nunca tem o mesmo `em` do primeiro: `em` igual é reenvio, não duplo clique
       const duplo = s.ultimoClique && s.ultimoClique.tipo === 'clicar' && mesmoSeletor(s.ultimoClique.seletor, alvo.seletor)
-        && s.ultimoClique.url === url && em - s.ultimoClique.em < JANELA_DUPLO_CLIQUE && !PAPEIS_MARCAR.has(alvo.papel);
+        && s.ultimoClique.url === url && em > s.ultimoClique.em && em - s.ultimoClique.em < JANELA_DUPLO_CLIQUE && !PAPEIS_MARCAR.has(alvo.papel);
       if (duplo) {
         const evento = { botao: mensagem.botao ?? 'esquerdo', vezes: 2, modificadores: mensagem.modificadores ?? [] };
         const titulo = gerarTitulo({ tipo: 'clicar', alvo, evento }, opcoes);
@@ -226,7 +233,8 @@ export function reduzir(estado, entrada, opcoes = {}) {
     }
 
     case 'SELECAO': {
-      const cap = montarCaptura(entrada.captura ?? null, mensagem, 'confirmacao');
+      // foto reaproveitada pelo SW (< 500 ms, mesma url) continua `compartilhada`, como em passoDigitar
+      const cap = montarCaptura(entrada.captura ?? null, mensagem, entrada.captura?.fonte === 'compartilhada' ? 'compartilhada' : 'confirmacao');
       const passo = novoPasso(s, {
         tipo: 'selecionar',
         contexto: montarContexto(mensagem),

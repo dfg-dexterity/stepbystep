@@ -2,7 +2,7 @@
 // Publicar com progresso, Retomar/Criar nova página. Escopo: só criar a página nova.
 // Fechar o diálogo durante a publicação pede confirmação e aborta os fetch; o registro da página criada
 // vai para o guia aberto (procurado pelo id) ou direto para o banco, se o usuário já saiu do editor.
-import { criarClienteNotion } from '../core/notion-cliente.js';
+import { criarClienteNotion, publicacaoRetomavel } from '../core/notion-cliente.js';
 import { obterConfig, salvarConfig, carregarGuia as lerGuiaDoBanco, salvarGuia } from '../core/armazenamento.js';
 import { assarPasso } from '../core/render-canvas.js';
 import { obterBitmap } from './canvas-anotacao.js';
@@ -123,7 +123,9 @@ export async function abrirNotion(cfg) {
   let paiTitulo = '';
   let publicando = false;
   let controlador = null; // AbortController da publicação em curso: cancelar = abortar os fetch
-  let publicacaoPendente = guia.publicacoes?.find((p) => p.destino === 'notion' && p.paginaId && !p.concluida) ?? null;
+  // só uma pendência saneada pelo núcleo (id e link no formato do Notion) oferece «Retomar»: um registro inválido ou
+  // adulterado (guide.json de terceiros) não esconde o Publicar nem anuncia publicação incompleta
+  let publicacaoPendente = (guia.publicacoes ?? []).map((p) => publicacaoRetomavel(p)).find(Boolean) ?? null;
 
   raiz.append(secToken, secPai, secPub);
   const dialogo = abrirDialogo({
@@ -341,7 +343,9 @@ export async function abrirNotion(cfg) {
       link.target = '_blank';
       link.rel = 'noopener';
       resultado.append(link);
-      avisar('Manual publicado no Notion.', { tipo: 'sucesso' });
+      // o núcleo avisa quando o guia mudou desde a tentativa anterior e a publicação recomeçou numa página nova
+      if (r.aviso) avisar(r.aviso, { tipo: 'atencao' });
+      else avisar('Manual publicado no Notion.', { tipo: 'sucesso' });
     } catch (e) {
       const cancelada = sinal.aborted;
       if (!cancelada) console.error('Falha na publicação', e);

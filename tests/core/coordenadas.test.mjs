@@ -90,6 +90,28 @@ test('recorteFocado: alvo largo e perto da borda', () => {
   assert.equal(recorteFocado({ x: 0, y: 0, w: 1000, h: 10 }, { largura: 2000, altura: 2000 }).w, 1240);
 });
 
+test('recorteFocado nunca sai da imagem por arredondamento (w = 0,4·W com h fracionário em ,5)', () => {
+  // W = 2890 → w = 1156, h = 722,5; alvo no rodapé: y = H − 722,5 = 277,5 e h arredondariam ambos para cima (y + h = 1001)
+  const imagem = { largura: 2890, altura: 1000 };
+  const r = recorteFocado({ x: 2800, y: 950, w: 50, h: 40 }, imagem, { margem: 120 });
+  assert.equal(r.y + r.h, 1000);
+  assert.equal(r.x + r.w, 2890);
+  assert.deepEqual(r, { x: 1734, y: 278, w: 1156, h: 722 });
+  // canto superior esquerdo e alvo no meio: mesma largura, borda inferior calculada pela soma
+  assert.deepEqual(recorteFocado({ x: 0, y: 0, w: 50, h: 40 }, imagem, { margem: 120 }), { x: 0, y: 0, w: 1156, h: 723 });
+  const meio = recorteFocado({ x: 1400, y: 500, w: 50, h: 40 }, imagem, { margem: 120 });
+  assert.ok(meio.x >= 0 && meio.y >= 0 && meio.x + meio.w <= 2890 && meio.y + meio.h <= 1000);
+  assert.equal(meio.h, Math.round(520 + 361.25) - Math.round(520 - 361.25));
+  // varredura: alvos em todas as bordas de várias imagens ficam sempre dentro e com tamanho inteiro
+  for (const W of [1000, 1440, 2890, 3456]) for (const H of [777, 1000, 1620, 2234]) {
+    for (const bbox of [{ x: 0, y: 0, w: 10, h: 10 }, { x: W - 10, y: H - 10, w: 10, h: 10 }, { x: W / 2, y: H - 5, w: 20, h: 5 }, { x: W - 5, y: H / 2, w: 5, h: 20 }]) {
+      const rec = recorteFocado(bbox, { largura: W, altura: H }, { escala: 2 });
+      assert.ok(rec.x >= 0 && rec.y >= 0 && rec.x + rec.w <= W && rec.y + rec.h <= H, JSON.stringify({ W, H, bbox, rec }));
+      for (const v of Object.values(rec)) assert.ok(Number.isInteger(v));
+    }
+  }
+});
+
 test('casos Mac: display secundário com origem negativa e escalas mistas', () => {
   // display 2 (Retina 2x) à esquerda do principal: limites Quartz x=-1728, y=-200, 1728×1117 pt
   const display = { x: -1728, y: -200, w: 1728, h: 1117 };

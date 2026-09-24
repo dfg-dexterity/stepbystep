@@ -1,13 +1,12 @@
 // webNavigation.* → entradas do redutor (NAVEGACAO, NAVEGACAO_CAPTURADA, SPA) e adoção de abas.
 // Só o frame de topo (frameId 0) da aba ativa da gravação conta; captureVisibleTab só vê a aba visível.
 import { lerEstado, gravarEstado } from './estado.js';
-import { enfileirar, aplicarAcoes, capturarPendente, finalizarGravacao } from './gravacao.js';
+import { enfileirar, aplicarAcoes, capturarPendente, finalizarGravacao, opcoesRedutor } from './gravacao.js';
 import { reduzir } from '../core/redutor-eventos.js';
 
 const ATRASO_COMMITTED = 150;  // deixa chegar o PRE_CLIQUE despachado no pagehide da página anterior
 const ATRASO_DOM = 800;        // onDOMContentLoaded + 800 ms, se onCompleted demorar
 const ATRASO_PINTURA = 300;    // depois de carregar, a página ainda pinta
-const OPCOES_REDUTOR = { plataforma: 'outro' };
 
 const registrar = (e) => console.warn('[StepByStep] navegação:', e?.message ?? e);
 const quando = (d) => (typeof d?.timeStamp === 'number' ? d.timeStamp : Date.now());
@@ -22,7 +21,7 @@ async function processarNavegacao(d) {
   const em = quando(d);
   if (em < s.iniciadoEm) return; // navegação anterior ao início (evento adiado pela fila)
   if (s.status === 'pausado') { await gravarEstado({ redutor: { ...s.redutor, urlAtual: d.url }, navegacaoPendente: pendenciaSemAba(s, d.tabId) }); return; }
-  const { estado: redutor, acoes } = reduzir(s.redutor, { tipo: 'NAVEGACAO', url: d.url, transicao: d.transitionType, em }, OPCOES_REDUTOR);
+  const { estado: redutor, acoes } = reduzir(s.redutor, { tipo: 'NAVEGACAO', url: d.url, transicao: d.transitionType, em }, opcoesRedutor(s));
   const r = await aplicarAcoes(s.guiaId, acoes);
   // sempre gravada: navegação atribuída a um gatilho (resultado.url) descarta a pendência anterior da aba,
   // senão os timers de DCL/completed do documento novo fotografariam «Navegue para A» com a página B
@@ -46,7 +45,7 @@ async function processarSpa(d) {
   if (!s || d.tabId !== s.abaId || s.status === 'pausado') return;
   const em = quando(d);
   if (em < s.iniciadoEm) return;
-  const { estado: redutor, acoes } = reduzir(s.redutor, { tipo: 'SPA', url: d.url, em }, OPCOES_REDUTOR);
+  const { estado: redutor, acoes } = reduzir(s.redutor, { tipo: 'SPA', url: d.url, em }, opcoesRedutor(s));
   await aplicarAcoes(s.guiaId, acoes);
   await gravarEstado({ redutor });
 }

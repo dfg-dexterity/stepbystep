@@ -79,5 +79,7 @@ export function recorteFocado(bbox, imagem, opcoes = {}) {
   let y = c.y - h / 2;
   x = limitar(x, 0, W - w);
   y = limitar(y, 0, H - h);
-  return { x: arred(x), y: arred(y), w: arred(w), h: arred(h) };
+  // arredonda as bordas, não x e w separados: y = H − 722,5 e h = 722,5 arredondariam ambos para cima (1 px fora)
+  const x0 = arred(x), y0 = arred(y);
+  return limitarAImagem({ x: x0, y: y0, w: arred(x + w) - x0, h: arred(y + h) - y0 }, imagem);
 }

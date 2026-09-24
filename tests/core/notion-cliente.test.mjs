@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   VERSAO_NOTION, ROTAS_PERMITIDAS, LIMITE_UPLOAD_PROXY, LIMITE_UPLOAD_DIRETO, URL_EDITOR,
-  criarClienteNotion, traduzirErroNotion, ErroNotion, publicacaoRetomavel, idNotionValido, urlNotionValida,
+  criarClienteNotion, traduzirErroNotion, ErroNotion, publicacaoRetomavel, idNotionValido, urlNotionValida, impressaoDoGuia,
 } from '../../packages/core/notion-cliente.js';
 import { criarGuia, criarPasso } from '../../packages/core/modelo.js';
 import { lerFixture } from './util.mjs';
@@ -268,15 +268,137 @@ test('publicacaoRetomavel: só retoma com paginaId no formato do Notion; url for
   assert.ok(urlNotionValida(URL_PAGINA));
   for (const u of ['https://phishing.example', 'javascript:alert(1)', 'https://www.notion.so.evil.com/x', 'http://www.notion.so/x', null]) assert.ok(!urlNotionValida(u), String(u));
 
-  const boa = { destino: 'notion', paginaId: PAGINA_ID, url: URL_PAGINA, em: '2026-09-24T12:00:00.000Z', concluida: false, uploads: { p_1: 'up-1' }, lotesEnviados: 1 };
+  const boa = { destino: 'notion', paginaId: PAGINA_ID, url: URL_PAGINA, em: '2026-09-24T12:00:00.000Z', concluida: false, uploads: { p_1: 'up-1' }, lotesEnviados: 1, impressao: 'a'.repeat(64) };
   assert.deepEqual(publicacaoRetomavel(boa), boa);
   assert.equal(publicacaoRetomavel({ ...boa, paginaId: 'abc/children?x=' }), null);
   assert.equal(publicacaoRetomavel({ ...boa, concluida: true }), null);
   assert.equal(publicacaoRetomavel({ ...boa, destino: 'pdf' }), null);
   assert.equal(publicacaoRetomavel(null), null);
   assert.equal(publicacaoRetomavel('x'), null);
-  const saneada = publicacaoRetomavel({ ...boa, url: 'https://phishing.example', em: 'ontem', uploads: ['x'], lotesEnviados: '7' });
-  assert.deepEqual(saneada, { ...boa, url: `https://www.notion.so/${PAGINA_ID.replace(/-/g, '')}`, em: null, uploads: {}, lotesEnviados: 0 });
+  const { impressao: _semImpressao, ...antiga } = boa;
+  const saneada = publicacaoRetomavel({ ...boa, url: 'https://phishing.example', em: 'ontem', uploads: ['x'], lotesEnviados: '7', impressao: 42 });
+  assert.deepEqual(saneada, { ...antiga, url: `https://www.notion.so/${PAGINA_ID.replace(/-/g, '')}`, em: null, uploads: {}, lotesEnviados: 0 });
+  assert.equal('impressao' in saneada, false, 'impressão fora do formato não entra');
+  // registro de versão anterior (sem impressão) continua retomável, com a mesma forma de antes
+  assert.deepEqual(publicacaoRetomavel(antiga), antiga);
+});
+
+test('impressaoDoGuia: muda com título, descrição, ordem, id, tipo, texto ou imagem dos passos; não com anotações', async () => {
+  const guia = lerFixture('guia-exemplo');
+  const base = await impressaoDoGuia(guia);
+  assert.match(base, /^[0-9a-f]{64}$/);
+  assert.equal(await impressaoDoGuia(structuredClone(guia)), base);
+  const variantes = [
+    (g) => { g.titulo = 'Outro'; },
+    (g) => { g.descricao = 'Outra'; },
+    (g) => { g.passos.reverse(); },
+    (g) => { g.passos[1].id = 'p_m1x4k9zr99zz'; },
+    (g) => { g.passos[1].tipo = 'manual'; },
+    (g) => { g.passos[1].titulo = 'Editado'; },
+    (g) => { g.passos[1].descricao = 'Nota nova'; },
+    (g) => { g.passos[1].captura.imagemId = 'img_m1x4k9zr99zz'; },
+    (g) => { g.passos[1].captura = { ...g.passos[1].captura, imagemId: null, faltante: true }; },
+    (g) => { g.passos.splice(0, 0, criarPasso({ tipo: 'manual', titulo: 'Novo', tituloAuto: false })); },
+    (g) => { g.passos.pop(); },
+  ];
+  for (const mudar of variantes) {
+    const g = structuredClone(guia);
+    mudar(g);
+    assert.notEqual(await impressaoDoGuia(g), base);
+  }
+  const anotado = structuredClone(guia);
+  anotado.passos[1].anotacoes = [];
+  anotado.atualizadoEm = '2030-01-01T00:00:00.000Z';
+  assert.equal(await impressaoDoGuia(anotado), base);
+});
+
+test('retomada com o guia alterado (passo inserido) recomeça numa página nova, reaproveitando os uploads válidos', async () => {
+  const guia = criarGuia({ titulo: 'Grande' });
+  for (let i = 0; i < 120; i++) guia.passos.push(criarPasso({ tipo: 'manual', titulo: `Passo ${i + 1}`, tituloAuto: false }));
+  guia.passos[0].captura = { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false };
+  guia.passos[110].captura = { imagemId: 'img_m1x4k9zr02ab', largura: 1, altura: 1, faltante: false };
+  const f = fetchFalso({ [`/v1/blocks/${PAGINA_ID}/children`]: [json({}, 500), json({}, 500), json({}, 500), json({}, 500)] });
+  let falha;
+  await cliente(f).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => blobPng(10) }).catch((e) => { falha = e; });
+  const parcial = falha.publicacao;
+  assert.equal(parcial.lotesEnviados, 1);
+  assert.match(parcial.impressao, /^[0-9a-f]{64}$/);
+  // o usuário insere um passo manual no início antes de clicar em «Retomar»
+  const editado = structuredClone(guia);
+  editado.passos.unshift(criarPasso({ tipo: 'manual', titulo: 'Antes de tudo', tituloAuto: false }));
+  const f2 = fetchFalso();
+  const assadas = [];
+  const r = await cliente(f2).publicarGuia(editado, { paiId: 'pai', obterImagemAssada: async (p) => { assadas.push(p.id); return blobPng(10); }, publicacaoAnterior: parcial });
+  const rotas = f2.chamadas.map((c) => `${c.metodo} ${c.rota}`);
+  // nenhum upload repetido (ids < 50 min), página nova com os 100 primeiros blocos e PATCH com os 22 restantes
+  assert.deepEqual(rotas, ['POST /v1/pages', `PATCH /v1/blocks/${PAGINA_ID}/children`]);
+  assert.deepEqual(assadas, []);
+  const pagina = f2.chamadas[0].json;
+  assert.equal(pagina.children.length, 100);
+  assert.equal(pagina.children[1].numbered_list_item.rich_text[0].text.content, 'Antes de tudo');
+  assert.equal(pagina.children[2].numbered_list_item.children[0].image.file_upload.id, 'up-1');
+  assert.equal(f2.chamadas[1].json.children.length, 22);
+  assert.equal(f2.chamadas[1].json.children.at(-10).numbered_list_item.children[0].image.file_upload.id, 'up-2');
+  assert.equal(r.publicacao.concluida, true);
+  assert.equal(r.publicacao.lotesEnviados, 2);
+  assert.notEqual(r.publicacao.impressao, parcial.impressao);
+  assert.deepEqual(r.paginaAnterior, { paginaId: PAGINA_ID, url: URL_PAGINA });
+  assert.match(r.aviso, /guia foi alterado.*página nova/);
+  // guia igual: retomada normal, sem aviso e sem POST /v1/pages
+  const f3 = fetchFalso();
+  const r3 = await cliente(f3).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => { throw new Error('não deveria assar de novo'); }, publicacaoAnterior: parcial });
+  assert.deepEqual(f3.chamadas.map((c) => `${c.metodo} ${c.rota}`), [`PATCH /v1/blocks/${PAGINA_ID}/children`]);
+  assert.equal(r3.aviso, undefined);
+  assert.equal(r3.paginaAnterior, undefined);
+  assert.equal(r3.publicacao.impressao, parcial.impressao);
+  // registro antigo, sem impressão: não há como conferir, retoma por contagem como antes
+  const { impressao: _semImpressao, ...legado } = parcial;
+  const f4 = fetchFalso();
+  const r4 = await cliente(f4).publicarGuia(editado, { paiId: 'pai', obterImagemAssada: async () => blobPng(10), publicacaoAnterior: legado });
+  assert.deepEqual(f4.chamadas.map((c) => `${c.metodo} ${c.rota}`), [`PATCH /v1/blocks/${PAGINA_ID}/children`]);
+  assert.equal(r4.aviso, undefined);
+  // uploads vencidos (> 50 min) com guia alterado: refaz os uploads e cria a página nova
+  const velha = { ...parcial, em: new Date(Date.now() - 55 * 60 * 1000).toISOString() };
+  const f5 = fetchFalso();
+  await cliente(f5).publicarGuia(editado, { paiId: 'pai', obterImagemAssada: async () => blobPng(10), publicacaoAnterior: velha });
+  const rotas5 = f5.chamadas.map((c) => `${c.metodo} ${c.rota}`);
+  assert.equal(rotas5.filter((x) => x === 'POST /v1/file_uploads').length, 2);
+  assert.ok(rotas5.includes('POST /v1/pages'));
+});
+
+test('falha de rede: uma retentativa (nunca em POST /v1/pages), erro traduzido com status 0; cancelamento sobe como está', async () => {
+  esperas.length = 0;
+  const semRede = () => { throw new TypeError('Failed to fetch'); };
+  const f = fetchFalso({ '/v1/users/me': [semRede, json({ name: 'ok' })] });
+  assert.deepEqual(await cliente(f).validarToken(), { nome: 'ok' });
+  assert.equal(f.chamadas.length, 2);
+  assert.deepEqual(esperas, [500]);
+  const f2 = fetchFalso({ '/v1/users/me': [semRede, semRede] });
+  await assert.rejects(cliente(f2).validarToken(), (e) => e instanceof ErroNotion && e.status === 0 && /Sem conexão com o Notion/.test(e.message));
+  assert.equal(f2.chamadas.length, 2);
+  // POST /v1/pages pode ter criado a página antes de a conexão cair: nunca é repetido
+  const f3 = fetchFalso({ '/v1/pages': [semRede, json({ id: 'x' })] });
+  await assert.rejects(cliente(f3).criarPagina('pai', 'T', []), /Sem conexão com o Notion/);
+  assert.equal(f3.chamadas.length, 1);
+  // AbortError (cancelar no diálogo) não é retentado nem traduzido
+  const aborto = () => { throw new DOMException('The user aborted a request.', 'AbortError'); };
+  const f4 = fetchFalso({ '/v1/users/me': [aborto, json({ name: 'ok' })] });
+  await assert.rejects(cliente(f4).validarToken(), (e) => e.name === 'AbortError');
+  assert.equal(f4.chamadas.length, 1);
+  // a publicação em curso continua carregando `.publicacao`
+  const guia = criarGuia({ titulo: 'G' });
+  guia.passos.push(criarPasso({ tipo: 'manual', titulo: 'Passo 1', tituloAuto: false }));
+  const f5 = fetchFalso({ '/v1/pages': [semRede] });
+  await assert.rejects(cliente(f5).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => null }), (e) => e.status === 0 && e.publicacao?.paginaId === null);
+});
+
+test('resposta 2xx sem corpo ou sem id em file_uploads/pages vira erro traduzido, não TypeError', async () => {
+  const f = fetchFalso({ '/v1/file_uploads': [new Response('', { status: 200 })] });
+  await assert.rejects(cliente(f).criarUpload('passo-01.png', 'image/png'), (e) => e instanceof ErroNotion && /Resposta inesperada do Notion/.test(e.message));
+  const f2 = fetchFalso({ '/v1/pages': [json({ object: 'page' })] });
+  await assert.rejects(cliente(f2).criarPagina('pai', 'T', []), (e) => e instanceof ErroNotion && /Resposta inesperada do Notion/.test(e.message) && e.corpo?.object === 'page');
+  const f3 = fetchFalso({ '/v1/pages': [new Response('', { status: 200 })] });
+  await assert.rejects(cliente(f3).criarPagina('pai', 'T', []), /Resposta inesperada do Notion/);
 });
 
 test('publicarGuia: publicação anterior adulterada (guide.json de terceiros) não entra na rota nem no link', async () => {

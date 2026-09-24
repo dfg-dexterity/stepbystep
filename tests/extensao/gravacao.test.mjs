@@ -68,6 +68,7 @@ const lerPassos = (guiaId) => core.carregarGuia(guiaId).then((g) => g.passos);
 const comum = (em, url = URL_A) => ({ viewport: { ...VIEWPORT_FALSO }, dpr: 1, url, tituloPagina: 'Página', scroll: { x: 0, y: 0 }, em });
 const preClique = (em, url = URL_A, alvo = ALVO_BOTAO) => ({ ...comum(em, url), alvo, pontoCss: { x: 110, y: 110 }, botao: 'esquerdo', modificadores: [], digitacaoPendente: null });
 const digitacao = (em, confirmadoPor, url = URL_A) => ({ ...comum(em, url), alvo: ALVO_NOME, valor: 'ACME', sensivel: false, motivo: null, confirmadoPor });
+const tecla = (em, modificadores) => ({ ...comum(em), tecla: 's', modificadores, alvo: null, digitacaoPendente: null });
 const remetente = (chrome, abaId, frameId = 0) => ({ tab: structuredClone(chrome.abas.get(abaId)), frameId, url: chrome.abas.get(abaId).url });
 
 teste('evento de aba em segundo plano: passo com captura faltante «aba não visível» e nenhuma foto (seria de outra aba)', async () => {
@@ -98,6 +99,57 @@ teste('iniciar numa aba em segundo plano grava o passo inicial «navegar» sem f
   assert.equal(passo.captura.motivo, gravacao.MOTIVO_ABA_OCULTA);
   assert.deepEqual(chrome.chamadas.captureVisibleTab, []);
   await gravacao.finalizarGravacao();
+});
+
+const UA_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const UA_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const definirNavigator = (userAgent) => Object.defineProperty(globalThis, 'navigator', { value: { userAgent }, configurable: true, writable: true });
+
+/** Inicia uma gravação com o userAgent dado, grava ⌘S/Win+S (TECLA com Meta) e encerra. @returns {Promise<{guia:object, estado:object, tecla:object}>} */
+async function gravarAtalhoMeta(userAgent) {
+  const chrome = criarChromeFalso({ abas: [{ id: 1, windowId: 10, active: true, url: URL_A, title: 'A' }] });
+  globalThis.chrome = chrome;
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  definirNavigator(userAgent);
+  try {
+    const r = await gravacao.iniciar(1);
+    assert.equal(r.ok, true, r.erro ?? '');
+    const estado = await lerEstado();
+    // o SW pode ser descartado entre o início e o evento: a plataforma vem do estado, nunca de variável de módulo
+    definirNavigator('Node.js/22');
+    const e = await gravacao.processarEvento('TECLA', tecla(Date.now(), ['Meta']), remetente(chrome, 1));
+    assert.equal(e.ok, true, e.erro ?? '');
+    const passos = await lerPassos(r.guiaId);
+    await gravacao.finalizarGravacao();
+    return { guia: await core.carregarGuia(r.guiaId), estado, tecla: passos.find((p) => p.tipo === 'tecla') };
+  } finally {
+    Object.defineProperty(globalThis, 'navigator', original);
+  }
+}
+
+teste('no macOS a plataforma dos atalhos («mac») vai para o estado da gravação e o atalho com ⌘ sai como «⌘S»', async () => {
+  const { guia, estado, tecla: passo } = await gravarAtalhoMeta(UA_MAC);
+  assert.equal(estado.plataforma, 'mac');
+  assert.equal(guia.origem.plataforma, 'Chrome 130 / macOS');
+  assert.equal(passo.titulo, 'Pressione ⌘S');
+  assert.equal(passo.evento.atalho, '⌘S');
+});
+
+teste('no Windows a plataforma dos atalhos é «outro» e Meta sai como «Win+S»', async () => {
+  const { guia, estado, tecla: passo } = await gravarAtalhoMeta(UA_WINDOWS);
+  assert.equal(estado.plataforma, 'outro');
+  assert.equal(guia.origem.plataforma, 'Chrome 130 / Windows');
+  assert.equal(passo.titulo, 'Pressione Win+S');
+});
+
+teste('estado de gravação sem `plataforma` (gravação anterior à mudança) segue «outro»', async () => {
+  const chrome = criarChromeFalso({ abas: [{ id: 1, windowId: 10, active: true, url: URL_A }] });
+  const { guiaId } = await prepararGravacao(chrome);
+  await gravacao.processarEvento('TECLA', tecla(5000, ['Ctrl']), remetente(chrome, 1));
+  const [passo] = await lerPassos(guiaId);
+  assert.equal(passo.titulo, 'Pressione Ctrl+S');
+  assert.deepEqual(gravacao.opcoesRedutor({}), { plataforma: 'outro' });
+  assert.deepEqual(gravacao.opcoesRedutor({ plataforma: 'mac' }), { plataforma: 'mac' });
 });
 
 teste('evento de outra janela: a foto é da janela do remetente e abaId/janelaId passam a ser os dele', async () => {

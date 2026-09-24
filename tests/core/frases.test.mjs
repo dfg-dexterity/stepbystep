@@ -60,6 +60,35 @@ test('abreviarUrl', () => {
   assert.equal(Array.from(r).length, 58);
   assert.ok(r.endsWith('…'));
   assert.equal(abreviarUrl('https://x.y/%E2%82'), 'x.y/%E2%82'); // URI inválida fica como está
+  // credenciais embutidas (ambientes internos/legados) nunca vão para o título
+  assert.equal(abreviarUrl('https://user:pw@host.com/a?x=1'), 'host.com/a');
+  assert.equal(abreviarUrl('http://admin:S3nha@intranet.local/painel'), 'intranet.local/painel');
+  assert.equal(abreviarUrl('https://token@www.exemplo.com/'), 'exemplo.com');
+  assert.equal(abreviarUrl('admin:pw@intranet.local/x'), 'intranet.local/x');
+  assert.equal(abreviarUrl('https://exemplo.com/contato@empresa'), 'exemplo.com/contato@empresa');   // @ depois do caminho fica
+  assert.equal(abreviarUrl('https://exemplo.com/?email=a@b.c'), 'exemplo.com');
+  assert.equal(gerarTitulo({ tipo: 'navegar', evento: { url: 'http://admin:S3nha@intranet.local/painel', transicao: 'typed' } }), 'Navegue para intranet.local/painel');
+});
+
+test('« » dentro de rótulos e valores viram ‹ › para o alvo fechar certo', () => {
+  const clique = (rotulo) => gerarTitulo({ tipo: 'clicar', evento: { botao: 'esquerdo', vezes: 1, modificadores: [] }, alvo: { papel: 'button', rotulo } });
+  assert.equal(clique('Item »1«'), 'Clique em «Item ›1‹»');
+  assert.equal(clique('«Criar»'), 'Clique em «Criar»');                        // aspas nas pontas continuam removidas
+  assert.equal(clique('Diga «oi» agora'), 'Clique em «Diga ‹oi› agora»');
+  assert.equal(gerarTitulo({ tipo: 'digitar', evento: { valor: 'a»b', sensivel: false, motivo: null, confirmadoPor: 'blur' }, alvo: { papel: 'textbox', campo: 'X' } }), 'Digite «a›b» no campo «X»');
+  assert.equal(gerarTitulo({ tipo: 'digitar', evento: { valor: '«ok»', sensivel: false, motivo: null, confirmadoPor: 'blur' }, alvo: { papel: 'textbox', campo: 'Obs' } }), 'Digite «‹ok›» no campo «Obs»');
+  // só aspas que envolvem o rótulo inteiro são removidas: «B» no fim não é aspa de fechamento do rótulo
+  assert.equal(gerarTitulo({ tipo: 'selecionar', evento: { valor: 'x', opcao: 'A «B»' }, alvo: { papel: 'combobox', campo: 'C«D' } }), 'Selecione «A ‹B›» em «C‹D»');
+  assert.equal(clique('"Salvar"'), 'Clique em «Salvar»');
+  assert.equal(clique('“Salvar”'), 'Clique em «Salvar»');
+  assert.equal(gerarTitulo({ tipo: 'marcar', evento: { marcado: true }, alvo: { papel: 'checkbox', rotulo: 'Li o «termo»' } }), 'Marque «Li o ‹termo›»');
+  assert.equal(gerarTitulo({ tipo: 'clicar', evento: { botao: 'esquerdo', vezes: 1, modificadores: [] }, alvo: { papel: 'menuitem', rotulo: 'x', menu: 'Arquivo › «Salvar»' } }), 'Escolha o menu «Arquivo › ‹Salvar›»');
+  assert.equal(gerarTitulo({ tipo: 'navegar', evento: { app: 'App «Beta»' } }, { plataforma: 'mac' }), 'Abra o app «App ‹Beta›»');
+  // todo alvo fecha: uma varredura simples encontra pares equilibrados
+  for (const t of [clique('Item »1«'), clique('Diga «oi» agora')]) {
+    assert.equal((t.match(/«/g) ?? []).length, 1);
+    assert.equal((t.match(/»/g) ?? []).length, 1);
+  }
 });
 
 test('formatarAtalho', () => {

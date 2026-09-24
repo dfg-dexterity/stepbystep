@@ -14,6 +14,7 @@ import { criarZip, lerZip } from '../../packages/core/zip.js';
 import { lerPacote } from '../../packages/core/pacote.js';
 import { numeroDoPasso } from '../../packages/core/modelo.js';
 import { recorteFocado } from '../../packages/core/coordenadas.js';
+import { publicacaoRetomavel } from '../../packages/core/notion-cliente.js';
 
 const RAIZ = fileURLToPath(new URL('../../', import.meta.url));
 const FIXTURES = join(RAIZ, 'tests', 'fixtures');
@@ -38,10 +39,12 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const semData = (guia) => { const { atualizadoEm, ...resto } = guia; return JSON.stringify(resto); };
 const tamanhoPng = (bytes) => ({ largura: new DataView(bytes.buffer, bytes.byteOffset).getUint32(16), altura: new DataView(bytes.buffer, bytes.byteOffset).getUint32(20) });
 
-/** Zip da pasta do fixture com um diretório de primeiro nível (como `ditto --keepParent`). */
-async function zipDaPasta(nome) {
+/** Zip da pasta do fixture com um diretório de primeiro nível (como `ditto --keepParent`); `mudarGuide(guia)` altera o guide.json antes de zipar. */
+async function zipDaPasta(nome, mudarGuide = null) {
   const pasta = join(FIXTURES, nome);
-  const entradas = [{ nome: `${nome}/guide.json`, dados: new Uint8Array(await readFile(join(pasta, 'guide.json'))) }];
+  let guide = await readFile(join(pasta, 'guide.json'));
+  if (mudarGuide) { const g = JSON.parse(guide.toString('utf8')); mudarGuide(g); guide = Buffer.from(JSON.stringify(g)); }
+  const entradas = [{ nome: `${nome}/guide.json`, dados: new Uint8Array(guide) }];
   for (const f of readdirSync(join(pasta, 'imagens'))) entradas.push({ nome: `${nome}/imagens/${f}`, dados: new Uint8Array(await readFile(join(pasta, 'imagens', f))) });
   return Buffer.from(await criarZip(entradas));
 }
@@ -512,6 +515,27 @@ test('«Criar nova página» encerra a publicação pendente antiga: ela não re
   await page.waitForSelector('#notion-token', { state: 'detached' });
 });
 
+test('pendência com paginaId fora do formato do Notion (registro adulterado) não oferece «Retomar» nem esconde o Publicar', async () => {
+  const ADULTERADO = 'abc/children?x=';
+  await gravarComoOutraAba(ID_MAC, (g) => {
+    g.publicacoes.push({ destino: 'notion', paginaId: 'abc/children?x=', url: 'https://phishing.example', em: new Date().toISOString(), concluida: false, uploads: {}, lotesEnviados: 1 });
+  });
+  await page.reload();
+  await page.waitForSelector('.passo-cartao');
+  await page.click('#btn-notion');
+  await page.waitForSelector('#notion-publicar:visible');
+  assert.equal(await page.$eval('#notion-retomar', (b) => b.hidden), true, 'registro inválido não é retomável');
+  assert.equal(await page.$eval('#notion-nova', (b) => b.hidden), true);
+  assert.doesNotMatch(await page.$eval('#notion-resultado', (e) => e.textContent), /Publicação anterior incompleta/);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#notion-token', { state: 'detached' });
+  // limpa o registro adulterado para os testes seguintes contarem as publicações do zero
+  await gravarComoOutraAba(ID_MAC, (g) => { g.publicacoes = g.publicacoes.filter((p) => p.paginaId !== 'abc/children?x='); });
+  await page.reload();
+  await page.waitForSelector('.passo-cartao');
+  assert.ok(!(await lerGuia(ID_MAC)).publicacoes.some((p) => p.paginaId === ADULTERADO));
+});
+
 test('publicação em andamento: fechar pede confirmação, cancelar aborta e sair do editor ainda registra a página', async () => {
   const n0 = (await lerGuia(ID_MAC)).publicacoes.length;
   const progredindo = () => page.waitForFunction(() => /Enviando imagem/.test(document.querySelector('.notion-progresso-texto')?.textContent ?? ''));
@@ -620,13 +644,28 @@ test('guia em gravação não abre no editor (o gravador ainda insere passos nel
 });
 
 test('importa guia-exemplo mantendo títulos e exporta o .stepbystep.zip de volta', async () => {
-  await importarZip('guia-exemplo.stepbystep.zip', await zipDaPasta('guia-exemplo'), ID_EXEMPLO);
+  // publicações vindas do arquivo (Notion de quem gravou): ficam as válidas, o resto é descartado com aviso
+  const ID_CONCLUIDA = 'b1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+  const ID_PENDENTE = 'c1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+  const concluida = { destino: 'notion', paginaId: ID_CONCLUIDA, url: `https://www.notion.so/Manual-${ID_CONCLUIDA.replace(/-/g, '')}`, em: '2026-09-01T12:00:00.000Z', concluida: true, uploads: {}, lotesEnviados: 2 };
+  const pendente = { destino: 'notion', paginaId: ID_PENDENTE, url: 'https://phishing.example', em: '2026-09-02T12:00:00.000Z', concluida: false, uploads: { p_x: 'up-1' }, lotesEnviados: 1 };
+  const adulteradas = [
+    { ...concluida, paginaId: 'abc/children?x=' },         // id fora do formato: entraria na rota da API
+    { ...concluida, url: 'https://phishing.example' },      // concluída com link fora do Notion
+    { ...pendente, destino: 'pdf' },                        // destino desconhecido
+  ];
+  await importarZip('guia-exemplo.stepbystep.zip', await zipDaPasta('guia-exemplo', (g) => { g.publicacoes = [adulteradas[0], concluida, adulteradas[1], pendente, adulteradas[2]]; }), ID_EXEMPLO);
+  await page.waitForSelector('.aviso--atencao:has-text("3 registro(s) de publicação no Notion descartado(s)")');
   const original = JSON.parse(await readFile(join(FIXTURES, 'guia-exemplo', 'guide.json'), 'utf8'));
   const titulos = await page.$$eval('.passo-cartao .titulo', (els) => els.map((e) => e.textContent));
   assert.deepEqual(titulos, original.passos.map((p) => p.titulo));
   const guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos.length === 10, 'guia-exemplo gravado');
   assert.deepEqual(guia.passos.map((p) => p.tituloAuto), original.passos.map((p) => p.tituloAuto));
   assert.equal(guia.imagens, undefined, 'o mapa imagens não vai para o IndexedDB');
+  // válidas preservadas na ordem; a pendente sai saneada pelo núcleo (link canônico da página no lugar do link estranho)
+  const pendenteSaneada = publicacaoRetomavel(pendente);
+  assert.equal(pendenteSaneada.url, `https://www.notion.so/${ID_PENDENTE.replace(/-/g, '')}`);
+  assert.deepEqual(guia.publicacoes, [concluida, pendenteSaneada]);
   assert.equal(await page.$eval('.passo-cartao--secao .titulo', (e) => e.textContent), 'Conferência no SAP GUI');
   assert.equal((await page.$$('.passo-cartao .dxt-badge:has-text("sensível")')).length, 1);
 

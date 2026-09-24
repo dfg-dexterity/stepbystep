@@ -17,25 +17,42 @@ export function nomeImagemExportada(indice) {
 const temImagem = (passo) => !!(passo.captura && !passo.captura.faltante && passo.captura.imagemId);
 
 /**
+ * Texto literal em Markdown (títulos, descrições e alt vêm de rótulos da página e do usuário): escapa a pontuação
+ * que abriria ênfase, link/imagem, código, HTML, tabela ou entidade, e o início de linha que viraria título, lista,
+ * citação ou régua. Em CommonMark toda pontuação ASCII pode ser escapada com `\`.
+ */
+export function escaparMarkdown(texto) {
+  return String(texto ?? '')
+    .replace(/[\\`*_[\]<>|~&]/g, (c) => '\\' + c)
+    .replace(/^([ \t]*)([#>+=-])/gm, '$1\\$2')
+    .replace(/^([ \t]*\d+)([.)])(?=\s|$)/gm, '$1\\$2');
+}
+
+/** Destino de link sem espaço nem parêntese (encerrariam o `(...)` da imagem); encodeURIComponent não codifica `()`. */
+const CODIGO_CAMINHO = { ' ': '%20', '(': '%28', ')': '%29' };
+const caminhoMarkdown = (caminho) => String(caminho).replace(/[ ()]/g, (c) => CODIGO_CAMINHO[c]);
+
+/**
  * @param {object} guia @param {{nomeImagem?:(passo:object, indice:number)=>string|null, data?:Date}} [opcoes]
  * @returns {string} Markdown: `# Título`, descrição, por passo `## {n}. {titulo}` (secao: `## {titulo}`), descrição, imagem; rodapé.
  */
 export function guiaParaMarkdown(guia, opcoes = {}) {
   const nomeImagem = opcoes.nomeImagem ?? ((passo, indice) => (temImagem(passo) ? nomeImagemExportada(numeroDoPasso(guia, indice)) : null));
   const linhas = [];
-  linhas.push(`# ${guia.titulo || 'Manual sem título'}`, '');
-  if (guia.descricao) linhas.push(guia.descricao, '');
+  linhas.push(`# ${escaparMarkdown(guia.titulo || 'Manual sem título')}`, '');
+  if (guia.descricao) linhas.push(escaparMarkdown(guia.descricao), '');
   guia.passos.forEach((passo, indice) => {
     const n = numeroDoPasso(guia, indice);
+    const titulo = escaparMarkdown(passo.titulo);
     if (passo.tipo === 'secao') {
-      linhas.push(`## ${passo.titulo}`, '');
-      if (passo.descricao) linhas.push(passo.descricao, '');
+      linhas.push(`## ${titulo}`, '');
+      if (passo.descricao) linhas.push(escaparMarkdown(passo.descricao), '');
       return;
     }
-    linhas.push(`## ${n}. ${passo.titulo}`, '');
-    if (passo.descricao) linhas.push(passo.descricao, '');
+    linhas.push(`## ${n}. ${titulo}`, '');
+    if (passo.descricao) linhas.push(escaparMarkdown(passo.descricao), '');
     const caminho = nomeImagem(passo, indice);
-    if (caminho) linhas.push(`![Passo ${n} — ${passo.titulo}](${caminho})`, '');
+    if (caminho) linhas.push(`![Passo ${n} — ${titulo}](${caminhoMarkdown(caminho)})`, '');
   });
   linhas.push('---', `_Gerado com StepByStep · Dexterity IT Solutions · ${formatarData(opcoes.data ?? new Date())}_`, '');
   return linhas.join('\n');

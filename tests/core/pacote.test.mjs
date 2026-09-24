@@ -67,6 +67,17 @@ test('lerPacote aceita a pasta do Mac dentro de um diretório de primeiro nível
   assert.deepEqual(validarGuia(guia), { ok: true, erros: [] });
 });
 
+test('lerPacote aceita zip recompactado no Windows (nomes com barra invertida)', async () => {
+  const g = lerFixture('guia-exemplo');
+  const entradas = [{ nome: '2026-09-24_1412_sap-gui\\guide.json', dados: texto(JSON.stringify(g)) }];
+  for (const info of Object.values(g.imagens)) entradas.push({ nome: '2026-09-24_1412_sap-gui\\' + info.arquivo.replace(/\//g, '\\'), dados: new Uint8Array([1]) });
+  const { guia, imagens, avisos } = lerPacote(await lerZip(await criarZip(entradas)));
+  assert.deepEqual(avisos, []);
+  assert.equal(imagens.size, 7);
+  assert.equal(guia.passos.length, 10);
+  assert.deepEqual(validarGuia(guia), { ok: true, erros: [] });
+});
+
 test('lerPacote: imagem ausente vira captura faltante com aviso; imagem sobrando gera aviso', () => {
   const g = lerFixture('guia-exemplo');
   const arquivos = new Map([[NOME_GUIDE, texto(JSON.stringify(g))]]);

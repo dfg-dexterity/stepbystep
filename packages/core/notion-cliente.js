@@ -16,6 +16,8 @@ const MAX_TENTATIVAS_429 = 5;
 const MAX_TENTATIVAS_SERVIDOR = 3;
 const ID_NOTION = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/;
 const PREFIXO_URL_NOTION = 'https://www.notion.so/';
+const MENSAGEM_SEM_REDE = 'Sem conexão com o Notion. Verifique a rede e tente novamente.';
+const MENSAGEM_GUIA_MUDOU = 'O guia foi alterado depois da tentativa anterior: os passos foram publicados numa página nova. A página incompleta pode ser excluída no Notion.';
 
 /** @returns {boolean} id de página/bloco no formato do Notion (uuid, com ou sem hífens) — só esses entram na rota da API */
 export const idNotionValido = (id) => typeof id === 'string' && ID_NOTION.test(id);
@@ -39,7 +41,23 @@ export function publicacaoRetomavel(publicacao) {
     concluida: false,
     uploads,
     lotesEnviados: Number.isInteger(p.lotesEnviados) && p.lotesEnviados > 0 ? p.lotesEnviados : 0,
+    // impressão digital do guia publicado (ausente em registros de versões anteriores: nada a conferir)
+    ...(typeof p.impressao === 'string' && p.impressao ? { impressao: p.impressao } : {}),
   };
+}
+
+const temImagem = (p) => p.tipo !== 'secao' && !!(p.captura && !p.captura.faltante && p.captura.imagemId);
+
+/**
+ * Impressão digital do que vai para a página: título e descrição do guia e, por passo, id, tipo, título, descrição e imagem.
+ * Gravada em `publicacao.impressao`; na retomada, se mudou, os lotes já enviados não correspondem mais aos passos.
+ * @param {object} guia @returns {Promise<string>} SHA-256 em hexadecimal
+ */
+export async function impressaoDoGuia(guia) {
+  const passos = (guia.passos ?? []).map((p) => [p.id, p.tipo, p.titulo ?? '', p.descricao ?? '', temImagem(p) ? p.captura.imagemId : null]);
+  const bytes = new TextEncoder().encode(JSON.stringify([guia.titulo ?? '', guia.descricao ?? '', passos]));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(hash, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export class ErroNotion extends Error {
@@ -77,7 +95,8 @@ async function lerCorpo(resposta) {
   try { return JSON.parse(texto); } catch { return texto; }
 }
 
-const temImagem = (p) => p.tipo !== 'secao' && !!(p.captura && !p.captura.faltante && p.captura.imagemId);
+/** Cancelamento pelo chamador (AbortController): sobe como está, sem retentativa nem tradução. */
+const ehAborto = (e) => e?.name === 'AbortError';
 
 /**
  * @param {{token:string, base:string, fetch:typeof fetch, versao?:string, esperar?:(ms:number)=>Promise<void>}} cfg
@@ -97,8 +116,17 @@ export function criarClienteNotion(cfg) {
     const criacaoDePagina = metodo === 'POST' && rota === '/v1/pages';
     let tentativas429 = 0;
     let tentativasServidor = 0;
+    let tentativasRede = 0;
     for (;;) {
-      const resposta = await enviar(base + rota, { method: metodo, headers, body });
+      let resposta;
+      try {
+        resposta = await enviar(base + rota, { method: metodo, headers, body });
+      } catch (e) {
+        // falha antes de qualquer resposta (sem rede, proxy fora, CORS): o fetch lança TypeError em inglês
+        if (ehAborto(e)) throw e;
+        if (tentativasRede < 1 && !criacaoDePagina) { tentativasRede++; await esperar(500); continue; }
+        throw new ErroNotion(0, null, MENSAGEM_SEM_REDE);
+      }
       if (resposta.ok) return lerCorpo(resposta);
       const corpo = await lerCorpo(resposta).catch(() => null);
       if (resposta.status === 429 && tentativas429 < MAX_TENTATIVAS_429) {
@@ -152,6 +180,7 @@ export function criarClienteNotion(cfg) {
     /** POST /v1/file_uploads @returns {Promise<{id, uploadUrl, expiraEm}>} */
     async criarUpload(nome, tipo) {
       const r = await requisicao('POST', '/v1/file_uploads', { json: { mode: 'single_part', filename: nome, content_type: tipo } });
+      if (typeof r?.id !== 'string' || !r.id) throw new ErroNotion(null, r, 'Resposta inesperada do Notion ao preparar o envio da imagem (sem id). Tente novamente.');
       return { id: r.id, uploadUrl: r.upload_url ?? null, expiraEm: r.expiry_time ?? null };
     },
 
@@ -172,6 +201,7 @@ export function criarClienteNotion(cfg) {
           children: filhos ?? [],
         },
       });
+      if (typeof r?.id !== 'string' || !r.id) throw new ErroNotion(null, r, 'Resposta inesperada do Notion ao criar a página (sem id). Confira no Notion antes de tentar de novo.');
       return { id: r.id, url: r.url ?? null };
     },
 
@@ -183,10 +213,13 @@ export function criarClienteNotion(cfg) {
 
     /**
      * Publicação sequencial e retomável: uploads em janelas de 30, criação da página com o primeiro lote,
-     * PATCH dos demais. Erros carregam `.publicacao` para a retomada.
+     * PATCH dos demais. Erros carregam `.publicacao` para a retomada. Os lotes são pulados por posição, então a
+     * retomada só vale para o guia que gerou `publicacaoAnterior` (`impressao`): se o guia mudou, os blocos já
+     * na página não podem ser apagados pela API — a publicação recomeça numa página nova, reaproveitando os
+     * uploads ainda válidos, e o resultado traz `aviso` com a página incompleta.
      * @param {object} guia
      * @param {{paiId:string, obterImagemAssada:(passo:object)=>Promise<Blob|null>, aoProgredir?:Function, publicacaoAnterior?:object, limiteUpload?:number, reduzirImagem?:Function, data?:Date}} o
-     * @returns {Promise<{paginaId:string, url:string|null, publicacao:object}>}
+     * @returns {Promise<{paginaId:string, url:string|null, publicacao:object, aviso?:string, paginaAnterior?:{paginaId:string, url:string|null}}>}
      */
     async publicarGuia(guia, o) {
       const { paiId, obterImagemAssada } = o;
@@ -194,16 +227,21 @@ export function criarClienteNotion(cfg) {
       const limite = o.limiteUpload ?? (atrasDoProxy ? LIMITE_UPLOAD_PROXY : LIMITE_UPLOAD_DIRETO);
       const reduzir = o.reduzirImagem ?? reduzirImagem;
       const agora = Date.now();
+      const impressao = await impressaoDoGuia(guia);
       const anterior = publicacaoRetomavel(o.publicacaoAnterior);   // ids/links vindos do arquivo só entram saneados
       const uploadsValidos = !!anterior && anterior.em !== null && agora - Date.parse(anterior.em) < VALIDADE_UPLOAD_MS;
+      // registro sem impressão (versão anterior) não tem como ser conferido: retoma como antes
+      const guiaMudou = !!anterior?.impressao && anterior.impressao !== impressao;
+      const paginaAnterior = guiaMudou ? { paginaId: anterior.paginaId, url: anterior.url } : null;
       const publicacao = {
         destino: 'notion',
-        paginaId: anterior ? anterior.paginaId : null,
-        url: anterior ? anterior.url : null,
+        paginaId: anterior && !guiaMudou ? anterior.paginaId : null,
+        url: anterior && !guiaMudou ? anterior.url : null,
         em: uploadsValidos ? anterior.em : new Date(agora).toISOString(),
         concluida: false,
         uploads: uploadsValidos ? anterior.uploads : {},
-        lotesEnviados: anterior ? anterior.lotesEnviados : 0,
+        lotesEnviados: anterior && !guiaMudou ? anterior.lotesEnviados : 0,
+        impressao,
       };
 
       // janelas de passos: corta quando a janela já tem 30 imagens
@@ -282,7 +320,9 @@ export function criarClienteNotion(cfg) {
           inicio = fim;
         }
         publicacao.concluida = true;
-        return { paginaId: publicacao.paginaId, url: publicacao.url, publicacao };
+        const resultado = { paginaId: publicacao.paginaId, url: publicacao.url, publicacao };
+        if (paginaAnterior) { resultado.aviso = MENSAGEM_GUIA_MUDOU; resultado.paginaAnterior = paginaAnterior; }
+        return resultado;
       } catch (e) {
         if (e && typeof e === 'object') e.publicacao = publicacao;
         throw e;

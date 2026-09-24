@@ -126,6 +126,8 @@ kbd {
 }
 
 .guia:hover .guia-titulo { color: var(--sbs-cerceta-claro); }
+.guia[disabled] { cursor: default; }
+.guia[disabled]:hover .guia-titulo { color: inherit; }
 
 .guia-titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -16,14 +16,30 @@ export function richText(texto, anotacoes = {}) {
   return saida;
 }
 
-/** Trechos entre «» com annotations.bold, resto normal. @returns {object[]} */
-export function richTextComDestaque(titulo) {
-  const partes = String(titulo ?? '').split(/(«[^»]*»)/).filter((p) => p !== '');
-  const saida = [];
-  for (const parte of partes) {
-    const destaque = parte.startsWith('«') && parte.endsWith('»');
-    saida.push(...richText(parte, destaque ? { bold: true } : {}));
+/** Índice do `»` que fecha o `«` em `inicio` (pares aninhados contam), ou -1 se não fecha. */
+function fimDoPar(texto, inicio) {
+  let abertos = 0;
+  for (let i = inicio; i < texto.length; i++) {
+    if (texto[i] === '«') abertos++;
+    else if (texto[i] === '»' && --abertos === 0) return i;
   }
+  return -1;
+}
+
+/** Trechos entre «» (par mais externo; «» sem par ficam literais) com annotations.bold, resto normal. @returns {object[]} */
+export function richTextComDestaque(titulo) {
+  const texto = String(titulo ?? '');
+  const saida = [];
+  let plano = '';
+  for (let i = 0; i < texto.length;) {
+    const fim = texto[i] === '«' ? fimDoPar(texto, i) : -1;
+    if (fim < 0) { plano += texto[i++]; continue; }
+    if (plano) saida.push(...richText(plano));
+    plano = '';
+    saida.push(...richText(texto.slice(i, fim + 1), { bold: true }));
+    i = fim + 1;
+  }
+  if (plano) saida.push(...richText(plano));
   return saida;
 }
 

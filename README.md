@@ -71,10 +71,13 @@ Páginas `chrome://`, a Chrome Web Store e PDFs não podem ser gravados — use 
 ```bash
 cd packages/mac
 make build                  # swift build -c release
-make test                   # swift test (GuiaTests, CoordenadasTests)
+make test                   # swift test (GuiaTests, CoordenadasTests, TeclasTests, PastaGravacaoTests) — exige o Xcode
 make app                    # monta build/StepByStep.app e assina com o certificado "StepByStep Dev"
 open build/StepByStep.app   # sempre pelo Finder/open — rodar o binário no Terminal dá as permissões ao Terminal
 ```
+
+`make build` e `make app` bastam com os Command Line Tools; `make test` precisa do Xcode instalado (o XCTest não
+vem no CLT). Os scripts rodam com `bash` + `pipefail`, então um erro do `swift build` não passa despercebido.
 
 Na primeira execução conceda **Acessibilidade** e **Gravação de Tela** (Ajustes › Privacidade e Segurança) e
 reabra o app. O certificado autoassinado estável (Acesso às Chaves › Assistente de Certificado › Criar

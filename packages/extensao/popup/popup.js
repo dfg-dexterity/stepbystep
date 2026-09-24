@@ -56,7 +56,10 @@ function renderGuias(guias) {
     const botao = document.createElement('button');
     botao.type = 'button';
     botao.className = 'guia';
-    botao.title = 'Abrir no editor';
+    // o editor recusa o guia em gravação (o SW ainda insere passos nele) e volta à biblioteca
+    const gravando = g.estado === 'gravando';
+    botao.disabled = gravando;
+    botao.title = gravando ? 'Pare a gravação na extensão para editar este guia' : 'Abrir no editor';
     const titulo = document.createElement('span');
     titulo.className = 'guia-titulo';
     titulo.textContent = g.titulo || 'Sem título';

@@ -110,6 +110,63 @@ test('lerZip rejeita bytes que não são zip', async () => {
   await assert.rejects(lerZip(new Uint8Array(0)), /zip inválido/);
 });
 
+test('criarZip recusa mais de 65 535 entradas com mensagem clara (sem zip64)', async () => {
+  const muitas = Array.from({ length: 0x10000 }, (_, i) => ({ nome: `a/${i}`, dados: new Uint8Array(0) }));
+  await assert.rejects(criarZip(muitas), /excede o limite do formato zip \(4 GB ou 65 535 arquivos\)\. Exporte o guia em partes/);
+  // no limite exato ainda passa
+  const lido = await lerZip(await criarZip(muitas.slice(0, 0xffff)));
+  assert.equal(lido.size, 0xffff);
+});
+
+test('lerZip rejeita campos zip64 (0xFFFFFFFF/0xFFFF) e confere o CRC-32 de cada entrada', async () => {
+  const dados = texto('conteúdo que precisa chegar inteiro');
+  const zip = await criarZip([{ nome: 'a.txt', dados }]);
+  const central = 30 + 5 + dados.length;
+  const fim = zip.length - 22;
+  const copia = () => new Uint8Array(zip);
+  // tamanho comprimido, original e deslocamento local sentinela → zip64
+  for (const campo of [20, 24, 42]) {
+    const z = copia();
+    new DataView(z.buffer).setUint32(central + campo, 0xffffffff, true);
+    await assert.rejects(lerZip(z), /zip64 .*não é suportado/);
+  }
+  // deslocamento do diretório central sentinela
+  const semDeslocamento = copia();
+  new DataView(semDeslocamento.buffer).setUint32(fim + 16, 0xffffffff, true);
+  await assert.rejects(lerZip(semDeslocamento), /zip64 .*não é suportado/);
+  // localizador zip64 (0x07064b50) nos 20 bytes antes do fim do diretório central
+  const localizador = new Uint8Array(20);
+  new DataView(localizador.buffer).setUint32(0, 0x07064b50, true);
+  const comLocalizador = new Uint8Array(zip.length + 20);
+  comLocalizador.set(zip.subarray(0, fim), 0);
+  comLocalizador.set(localizador, fim);
+  comLocalizador.set(zip.subarray(fim), fim + 20);
+  await assert.rejects(lerZip(comLocalizador), /zip64 .*não é suportado/);
+  // um byte trocado no conteúdo (download corrompido) não passa despercebido
+  const corrompido = copia();
+  corrompido[30 + 5 + 3] ^= 0x01;
+  await assert.rejects(lerZip(corrompido), /zip corrompido \(a\.txt não confere com o CRC gravado\)/);
+  // DEFLATE também é conferido depois de inflar
+  const deflatado = zipDeflatado([{ nome: 'b.txt', dados: texto('x'.repeat(2000)) }]);
+  const dvD = new DataView(deflatado.buffer);
+  const centralD = deflatado.length - 22 - (46 + 5);
+  dvD.setUint32(centralD + 16, dvD.getUint32(centralD + 16, true) ^ 1, true);
+  await assert.rejects(lerZip(deflatado), /zip corrompido \(b\.txt/);
+  // intacto continua lendo
+  assert.equal(decodificar((await lerZip(zip)).get('a.txt')), 'conteúdo que precisa chegar inteiro');
+});
+
+test('lerZip normaliza nomes com barra invertida (zips do Windows) e ./ inicial', async () => {
+  const zip = await criarZip([
+    { nome: 'pasta\\guide.json', dados: texto('{}') },
+    { nome: 'pasta\\imagens\\a.png', dados: new Uint8Array([1]) },
+    { nome: './raiz.txt', dados: texto('r') },
+    { nome: '__MACOSX\\pasta\\._guide.json', dados: texto('lixo') },
+  ]);
+  const lido = await lerZip(zip);
+  assert.deepEqual([...lido.keys()], ['pasta/guide.json', 'pasta/imagens/a.png', 'raiz.txt']);
+});
+
 test('zip gerado passa em `unzip -t` quando disponível', async () => {
   let unzip;
   try { unzip = execFileSync('which', ['unzip']).toString().trim(); } catch { unzip = null; }

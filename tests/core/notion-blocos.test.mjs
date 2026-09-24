@@ -44,6 +44,22 @@ test('richTextComDestaque põe negrito só no que está entre «»', () => {
   assert.deepEqual(richTextComDestaque(''), []);
 });
 
+test('richTextComDestaque casa o par mais externo; «» sem par ficam literais (títulos editados ou importados)', () => {
+  const b = (content) => ({ type: 'text', text: { content }, annotations: { bold: true } });
+  const n = (content) => ({ type: 'text', text: { content } });
+  assert.deepEqual(richTextComDestaque('Digite ««ok»» no campo «Obs»'), [n('Digite '), b('««ok»»'), n(' no campo '), b('«Obs»')]);
+  assert.deepEqual(richTextComDestaque('Clique em «Item »1«»'), [n('Clique em '), b('«Item »'), n('1'), b('«»')]);
+  assert.deepEqual(richTextComDestaque('Digite «a»b» no campo «X»'), [n('Digite '), b('«a»'), n('b» no campo '), b('«X»')]);
+  assert.deepEqual(richTextComDestaque('«aberto sem fechar'), [n('«aberto sem fechar')]);
+  assert.deepEqual(richTextComDestaque('fecha» sem abrir «Nome»'), [n('fecha» sem abrir '), b('«Nome»')]);
+  assert.deepEqual(richTextComDestaque('«a«b» c'), [n('«a'), b('«b»'), n(' c')]);
+  assert.deepEqual(richTextComDestaque('«😀»'), [b('«😀»')]);
+  // o texto concatenado é sempre o título original
+  for (const t of ['Digite ««ok»» no campo «Obs»', 'Clique em «Item »1«»', '«a«b» c', 'x»»«']) {
+    assert.equal(richTextComDestaque(t).map((p) => p.text.content).join(''), t);
+  }
+});
+
 test('contarBlocos conta filhos recursivamente', () => {
   const folha = { object: 'block', type: 'paragraph', paragraph: { rich_text: [] } };
   assert.equal(contarBlocos(folha), 1);

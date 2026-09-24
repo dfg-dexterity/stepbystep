@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { guiaParaMarkdown, nomeImagemExportada, formatarData } from '../../packages/core/exportar-markdown.js';
+import { guiaParaMarkdown, nomeImagemExportada, formatarData, escaparMarkdown } from '../../packages/core/exportar-markdown.js';
 import { criarGuia, criarPasso } from '../../packages/core/modelo.js';
 import { FIXTURES, lerFixture } from './util.mjs';
 
@@ -53,6 +53,42 @@ test('nomeImagem injetado pode omitir imagens', () => {
   const md = guiaParaMarkdown(guia, { data: DATA_FIXA, nomeImagem: (p, i) => (i === 1 ? 'x/y.png' : null) });
   assert.equal((md.match(/!\[/g) ?? []).length, 1);
   assert.ok(md.includes('](x/y.png)'));
+});
+
+test('escaparMarkdown: pontuação de ênfase, link, HTML e código; início de linha de título, lista e citação', () => {
+  assert.equal(escaparMarkdown('Clique em «a]b»'), 'Clique em «a\\]b»');
+  assert.equal(escaparMarkdown('Itens [2'), 'Itens \\[2');
+  assert.equal(escaparMarkdown('a*b_c`d~e|f&g\\h'), 'a\\*b\\_c\\`d\\~e\\|f\\&g\\\\h');
+  assert.equal(escaparMarkdown('<img src=x onerror=alert(1)>'), '\\<img src=x onerror=alert(1)\\>');
+  assert.equal(escaparMarkdown('# título\n- item\n+ outro\n> citação\n1. lista\n2) lista\n---\n=== '), '\\# título\n\\- item\n\\+ outro\n\\> citação\n1\\. lista\n2\\) lista\n\\---\n\\=== ');
+  assert.equal(escaparMarkdown('  - recuado'), '  \\- recuado');
+  assert.equal(escaparMarkdown('Arquivo › Salvar, e-mail 2.0 (v1): ok!'), 'Arquivo › Salvar, e-mail 2.0 (v1): ok!');
+  assert.equal(escaparMarkdown(''), '');
+  assert.equal(escaparMarkdown(null), '');
+});
+
+test('títulos, descrições e alt com [ ] * < saem literais e a imagem continua válida; caminho com espaço/parêntese é codificado', () => {
+  const g = criarGuia({ titulo: 'Manual [beta] <v2>', descricao: '# não é título\n*nem ênfase*' });
+  g.passos.push(criarPasso({ tipo: 'clicar', titulo: 'Clique em «Fechar ]»', descricao: '- não é lista', captura: { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false } }));
+  g.passos.push(criarPasso({ tipo: 'clicar', titulo: 'Clique em «<img src=x onerror=alert(1)>»', captura: { imagemId: 'img_m1x4k9zr02ab', largura: 1, altura: 1, faltante: false } }));
+  g.passos.push(criarPasso({ tipo: 'secao', titulo: 'Parte *2* [rev]', tituloAuto: false, descricao: '> sem citação' }));
+  g.passos.push(criarPasso({ tipo: 'digitar', titulo: 'Digite «a_b» no campo «Itens [2»', captura: { imagemId: 'img_m1x4k9zr04ad', largura: 1, altura: 1, faltante: false } }));
+  const md = guiaParaMarkdown(g, { data: DATA_FIXA, nomeImagem: (p, i) => (i === 3 ? 'pasta (1)/passo 03.png' : nomeImagemExportada(i + 1)) });
+  const linhas = md.split('\n');
+  assert.equal(linhas[0], '# Manual \\[beta\\] \\<v2\\>');
+  assert.equal(linhas[2], '\\# não é título');
+  assert.equal(linhas[3], '\\*nem ênfase\\*');
+  assert.ok(md.includes('\n## 1. Clique em «Fechar \\]»\n\n\\- não é lista\n\n![Passo 1 — Clique em «Fechar \\]»](imagens/passo-01.png)\n'));
+  assert.ok(md.includes('\n## 2. Clique em «\\<img src=x onerror=alert(1)\\>»\n'));
+  assert.ok(md.includes('![Passo 2 — Clique em «\\<img src=x onerror=alert(1)\\>»](imagens/passo-02.png)'));
+  assert.ok(!/(^|[^\\])<img/.test(md), 'todo < sai escapado');
+  assert.ok(md.includes('\n## Parte \\*2\\* \\[rev\\]\n\n\\> sem citação\n'));
+  assert.ok(md.includes('![Passo 3 — Digite «a\\_b» no campo «Itens \\[2»](pasta%20%281%29/passo%2003.png)'));
+  // toda imagem continua sendo uma imagem: alt sem colchete solto e destino sem espaço
+  for (const m of md.matchAll(/!\[([^\]\\]|\\.)*\]\(([^\s()]+)\)/g)) assert.ok(m[2].endsWith('.png'), m[0]);
+  assert.equal((md.match(/!\[/g) ?? []).length, 3);
+  // o rodapé (itálico intencional) não é escapado
+  assert.ok(md.endsWith('---\n_Gerado com StepByStep · Dexterity IT Solutions · 24/09/2026_\n'));
 });
 
 test('guia vazio e sem título', () => {

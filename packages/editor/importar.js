@@ -9,6 +9,7 @@ import { gerarTitulo } from '../core/frases.js';
 import { gerarId } from '../core/ids.js';
 import { anotacoesAutomaticas } from '../core/anotacoes.js';
 import { carregarGuia, salvarGuia, salvarImagem, excluirImagensOrfas } from '../core/armazenamento.js';
+import { publicacaoRetomavel, idNotionValido, urlNotionValida } from '../core/notion-cliente.js';
 import { plataformaDoGuia } from './estado.js';
 
 /** @typedef {{caminho:string, arquivo:Blob}} Entrada */
@@ -64,6 +65,22 @@ function guiaSemImagens(texto) {
   const v = validarGuia(guia);
   if (!v.ok) throw new Error('Guia inválido: ' + v.erros.join('; '));
   return { guia, imagens: new Map(), avisos: ['Arquivo .json sem imagens: anexe as capturas passo a passo.'] };
+}
+
+/**
+ * `publicacoes` do arquivo apontam para páginas do Notion de quem gravou o guia (outro workspace, talvez adulteradas):
+ * ficam só as pendências saneadas pelo núcleo e as concluídas com id e link no formato do Notion; o resto é descartado.
+ * @returns {number} quantas entradas foram descartadas
+ */
+function sanearPublicacoes(guia) {
+  const antes = guia.publicacoes.length;
+  guia.publicacoes = guia.publicacoes.flatMap((p) => {
+    const pendente = publicacaoRetomavel(p);
+    if (pendente) return [pendente];
+    const concluida = p?.destino === 'notion' && p.concluida === true && idNotionValido(p.paginaId) && urlNotionValida(p.url);
+    return concluida ? [p] : [];
+  });
+  return antes - guia.publicacoes.length;
 }
 
 /** Novos ids para guia, passos, anotações e imagens (duplicar). */
@@ -131,6 +148,8 @@ export async function importarEntradas(entradas, opcoes = {}) {
   }
   const { guia, avisos } = lido;
   let imagens = lido.imagens;
+  const descartadas = sanearPublicacoes(guia);
+  if (descartadas) avisos.push(`${descartadas} registro(s) de publicação no Notion descartado(s) do arquivo: id ou link fora do formato do Notion.`);
 
   // conflito de id: substituir o guia existente ou importar como cópia. Ao substituir, nada é apagado antes de a
   // importação terminar: as imagens novas gravam por cima (mesmos ids), o guia novo substitui o registro e só então

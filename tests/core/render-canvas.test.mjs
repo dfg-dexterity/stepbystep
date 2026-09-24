@@ -86,6 +86,35 @@ test('recorte entra como translate sem alterar coordenadas das anotações', () 
   assert.deepEqual(ctx2.chamadas.find((c) => c[0] === 'rect'), ['rect', 0, 0, 2880, 1620]);
 });
 
+test('holofote com retângulos auto sobrepostos: o clip recebe a união em retângulos disjuntos (a interseção fica clara)', () => {
+  const passo = (retangulos) => ({ captura: { escala: 1 }, anotacoes: retangulos.map((r, i) => ({ id: `a_m1x4k9zr0${i}a1`, tipo: 'retangulo', auto: true, cor: 'cerceta', ...r })) });
+  const rectsDoClip = (p) => {
+    const ctx = criarCtxFalso();
+    desenharPasso(ctx, IMAGEM, p, { escala: 1, estilo: { cor: 'cerceta', escurecerFora: true } });
+    return ctx.chamadas.filter((c) => c[0] === 'rect').slice(1).map(([, x, y, w, h]) => ({ x, y, w, h }));
+  };
+  const area = (rs) => rs.reduce((s, r) => s + r.w * r.h, 0);
+  const disjuntos = (rs) => rs.every((a, i) => rs.every((b, j) => i === j || a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
+  // campo e botão mesclados (mesma foto), sobrepostos em 50×50: união = 10000 + 10000 − 2500
+  const uniao = rectsDoClip(passo([{ x: 0, y: 0, w: 100, h: 100 }, { x: 50, y: 50, w: 100, h: 100 }]));
+  assert.ok(disjuntos(uniao), JSON.stringify(uniao));
+  assert.equal(area(uniao), 17500);
+  assert.deepEqual(uniao, [{ x: 0, y: 0, w: 50, h: 100 }, { x: 50, y: 0, w: 50, h: 150 }, { x: 100, y: 50, w: 50, h: 100 }]);
+  // passo duplicado: dois retângulos idênticos contam uma vez só
+  assert.deepEqual(rectsDoClip(passo([{ x: 10, y: 20, w: 30, h: 40 }, { x: 10, y: 20, w: 30, h: 40 }])), [{ x: 10, y: 20, w: 30, h: 40 }]);
+  // um dentro do outro
+  assert.deepEqual(rectsDoClip(passo([{ x: 0, y: 0, w: 100, h: 100 }, { x: 25, y: 25, w: 10, h: 10 }])), [{ x: 0, y: 0, w: 25, h: 100 }, { x: 25, y: 0, w: 10, h: 100 }, { x: 35, y: 0, w: 65, h: 100 }]);
+  // separados: mesma área total; um só e retângulo vazio: como antes
+  const separados = rectsDoClip(passo([{ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 10, h: 10 }]));
+  assert.ok(disjuntos(separados));
+  assert.equal(area(separados), 200);
+  assert.deepEqual(rectsDoClip(passo([{ x: 684, y: 596, w: 832, h: 88 }, { x: 5, y: 5, w: 0, h: 10 }])), [{ x: 684, y: 596, w: 832, h: 88 }]);
+  // retângulo manual não entra no holofote
+  const p = passo([{ x: 0, y: 0, w: 100, h: 100 }]);
+  p.anotacoes.push({ id: 'a_m1x4k9zr09a9', tipo: 'retangulo', auto: false, cor: 'ambar', x: 50, y: 50, w: 100, h: 100 });
+  assert.deepEqual(rectsDoClip(p), [{ x: 0, y: 0, w: 100, h: 100 }]);
+});
+
 test('geometria proporcional à escala da captura', () => {
   const ctx = criarCtxFalso();
   const p = passoCompleto();

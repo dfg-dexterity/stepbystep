@@ -39,11 +39,34 @@ function desenharDesfoque(ctx, imagem, a, criarCanvas) {
   ctx.imageSmoothingEnabled = true;
 }
 
+/**
+ * União de retângulos como lista de retângulos disjuntos (faixas verticais entre x consecutivos, intervalos de y
+ * mesclados). Com a regra par-ímpar, um ponto coberto por dois retângulos auto sobrepostos (passos mesclados que
+ * compartilham a foto) contaria 3 e ficaria dentro do clip — escurecido justamente sobre o alvo.
+ */
+function unirRetangulos(retangulos) {
+  const rs = retangulos.filter((r) => r.w > 0 && r.h > 0);
+  const xs = [...new Set(rs.flatMap((r) => [r.x, r.x + r.w]))].sort((a, b) => a - b);
+  const saida = [];
+  for (let i = 0; i + 1 < xs.length; i++) {
+    const x0 = xs[i], x1 = xs[i + 1];
+    const faixas = rs.filter((r) => r.x <= x0 && r.x + r.w >= x1).map((r) => [r.y, r.y + r.h]).sort((a, b) => a[0] - b[0]);
+    let atual = null;
+    for (const [y0, y1] of faixas) {
+      if (atual && y0 <= atual[1]) { atual[1] = Math.max(atual[1], y1); continue; }
+      if (atual) saida.push({ x: x0, y: atual[0], w: x1 - x0, h: atual[1] - atual[0] });
+      atual = [y0, y1];
+    }
+    if (atual) saida.push({ x: x0, y: atual[0], w: x1 - x0, h: atual[1] - atual[0] });
+  }
+  return saida;
+}
+
 function desenharHolofote(ctx, area, retangulos) {
   ctx.save();
   ctx.beginPath();
   ctx.rect(area.x, area.y, area.w, area.h);
-  for (const r of retangulos) ctx.rect(r.x, r.y, r.w, r.h);
+  for (const r of unirRetangulos(retangulos)) ctx.rect(r.x, r.y, r.w, r.h);
   ctx.clip('evenodd');
   ctx.fillStyle = 'rgba(27,27,27,.35)';
   ctx.fillRect(area.x, area.y, area.w, area.h);

@@ -21,7 +21,6 @@ const PREFIXOS_PROIBIDOS = [
 ];
 // fonte pedida ao capturar, por tipo de mensagem (PASSO_MANUAL não fotografa)
 const FONTE_POR_TIPO = { PRE_CLIQUE: 'pointerdown', MARCACAO: 'pointerdown', TECLA: 'pointerdown', DIGITACAO: 'confirmacao', SELECAO: 'confirmacao' };
-const OPCOES_REDUTOR = { plataforma: 'outro' };
 const ESPERA_PASSO_INICIAL = 300;
 const ESPERA_FLUSH = 150;
 // captureVisibleTab fotografa a aba ATIVA da janela: um evento de aba em segundo plano (flush por tempo,
@@ -52,6 +51,16 @@ function descreverPlataforma() {
   const versao = /Chrome\/(\d+)/.exec(ua)?.[1] ?? '?';
   const so = /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : 'desconhecido';
   return `Chrome ${versao} / ${so}`;
+}
+
+/** Plataforma dos atalhos (3.6): `'mac'` (⌘S) no macOS, `'outro'` (Win+S) nos demais — pelo userAgent do próprio Chrome. */
+function plataformaDosAtalhos() {
+  return /Mac OS X|Macintosh/.test(globalThis.navigator?.userAgent ?? '') ? 'mac' : 'outro';
+}
+
+/** Opções do redutor lidas do estado da gravação (`plataforma`, decidida em `iniciar`); estado sem o campo segue 'outro'. */
+export function opcoesRedutor(s) {
+  return { plataforma: s?.plataforma === 'mac' ? 'mac' : 'outro' };
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +197,7 @@ function patchDeCaptura(captura, abaId) {
 
 /** Reduz uma entrada já com captura, aplica, persiste e atualiza o badge. @returns {Promise<string|null>} passoId */
 async function reduzirEPersistir(s, entrada, captura, abaId) {
-  const { estado: redutor, acoes } = reduzir(s.redutor, entrada, OPCOES_REDUTOR);
+  const { estado: redutor, acoes } = reduzir(s.redutor, entrada, opcoesRedutor(s));
   // criadoEm = instante do evento na página (não o da persistência): é o que ordena os passos
   const criadoEm = new Date(Number.isFinite(entrada.em) ? entrada.em : Date.now()).toISOString();
   for (const a of acoes) if (a.tipo === 'criar') a.passo.criadoEm = criadoEm;
@@ -318,7 +327,7 @@ export function iniciar(abaId) {
     await salvarGuia(guia);
     const estado = {
       guiaId: guia.id, status: 'gravando', abaId, janelaId: aba.windowId, abas: [abaId], contador: 0, iniciadoEm: Date.now(),
-      ultimaCaptura: null, ultimoPassoId: null, navegacaoPendente: null, redutor: criarEstadoRedutor(url),
+      plataforma: plataformaDosAtalhos(), ultimaCaptura: null, ultimoPassoId: null, navegacaoPendente: null, redutor: criarEstadoRedutor(url),
     };
     await gravarEstado(estado);
     try {

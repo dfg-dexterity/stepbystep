@@ -301,6 +301,57 @@ test('reenvio da mesma mensagem (mesmo em e seletor) é descartado', () => {
   assert.deepEqual(d2.acoes, []);
 });
 
+test('reenvio depois de outra entrada intermediária (SPA, NAVEGACAO, TECLA) não vira duplo clique nem passo repetido', () => {
+  // clique em link de SPA: o pushState dispara SPA antes de o content script reenviar o PRE_CLIQUE (SW morreu sem responder)
+  let r = reduzir(criarEstadoRedutor('https://app.exemplo.com/form'), preClique({ em: 5000, alvo: { ...ALVO_BOTAO, rotulo: 'Salvar', seletor: '#salvar' } }));
+  const clique = r.acoes[0].passo;
+  r = reduzir(r.estado, { tipo: 'SPA', url: 'https://app.exemplo.com/#/lista', em: 5100 });
+  assert.equal(r.acoes[0].tipo, 'atualizar');
+  const reenvio = reduzir(r.estado, preClique({ em: 5000, alvo: { ...ALVO_BOTAO, rotulo: 'Salvar', seletor: '#salvar' } }));
+  assert.deepEqual(reenvio.acoes, []);
+  assert.equal(reenvio.estado.contador, 1);
+  assert.equal(reenvio.estado.ultimoClique.passoId, clique.id);
+  // NAVEGACAO 150 ms depois do commit e TECLA de outro frame também ficam no meio
+  r = reduzir(reenvio.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/b', transicao: 'link', em: 5300 });
+  r = reduzir(r.estado, { tipo: 'TECLA', mensagem: comum({ tecla: 'Escape', modificadores: [], alvo: null, frameId: 3 }), captura: capturaOk(), em: 5350 });
+  assert.equal(r.estado.contador, 2);
+  assert.deepEqual(reduzir(r.estado, preClique({ em: 5000, alvo: { ...ALVO_BOTAO, rotulo: 'Salvar', seletor: '#salvar' } })).acoes, []);
+  // digitação reenviada depois de um SPA não cria o passo de novo
+  let d = reduzir(criarEstadoRedutor(), { tipo: 'DIGITACAO', mensagem: digitacaoPendente({ em: 700 }), captura: capturaOk(), em: 700 });
+  d = reduzir(d.estado, { tipo: 'SPA', url: 'https://app.exemplo.com/#/x', em: 720 });
+  d = reduzir(d.estado, { tipo: 'DIGITACAO', mensagem: digitacaoPendente({ em: 700 }), captura: capturaOk(), em: 700 });
+  assert.deepEqual(d.acoes, []);
+  assert.equal(d.estado.contador, 1);
+  // a memória é curta: um clique igual muito depois (fora da janela) é um clique novo
+  let m = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
+  for (let i = 1; i <= 8; i++) m = reduzir(m.estado, { tipo: 'SPA', url: `https://a.b/#${i}`, em: 1000 + i });
+  assert.equal(m.estado.ultimasEntradas.length, 8);
+  assert.equal(reduzir(m.estado, preClique({ em: 1000 })).acoes.length, 1);
+  // dois cliques reais no mesmo alvo (em crescente, < 400 ms) continuam virando duplo clique
+  let c = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
+  c = reduzir(c.estado, preClique({ em: 1250 }));
+  assert.equal(c.acoes[0].tipo, 'atualizar');
+  assert.equal(c.acoes[0].campos.evento.vezes, 2);
+  // estado gravado por versão anterior (só ultimaEntrada) continua descartando o reenvio
+  const antigo = { contador: 1, urlAtual: null, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: { tipo: 'PRE_CLIQUE', em: 1000, seletor: '#criar' }, sensiveis: [] };
+  assert.deepEqual(reduzir(antigo, preClique({ em: 1000 })).acoes, []);
+  assert.deepEqual(reduzir(antigo, preClique({ em: 1000 })).estado.ultimasEntradas, [antigo.ultimaEntrada]);
+});
+
+test('SELECAO com foto reaproveitada pelo SW mantém fonte compartilhada; foto própria vira confirmacao', () => {
+  const alvo = { ...ALVO_NOME, papel: 'combobox', rotulo: 'País', campo: 'País', tag: 'select', tipoInput: null, seletor: '#pais' };
+  const compartilhada = reduzir(criarEstadoRedutor(), { tipo: 'SELECAO', mensagem: comum({ alvo, valor: 'BR', opcao: 'Brasil' }), captura: capturaOk('img_m1x4k9zr05ae', 'compartilhada'), em: 2000 });
+  assert.equal(compartilhada.acoes[0].passo.captura.fonte, 'compartilhada');
+  assert.equal(compartilhada.acoes[0].passo.captura.imagemId, 'img_m1x4k9zr05ae');
+  for (const fonte of ['confirmacao', 'pointerdown']) {
+    const propria = reduzir(criarEstadoRedutor(), { tipo: 'SELECAO', mensagem: comum({ alvo, valor: 'BR', opcao: 'Brasil' }), captura: capturaOk('img_m1x4k9zr07ag', fonte), em: 2000 });
+    assert.equal(propria.acoes[0].passo.captura.fonte, 'confirmacao');
+  }
+  const faltante = reduzir(criarEstadoRedutor(), { tipo: 'SELECAO', mensagem: comum({ alvo, valor: 'BR', opcao: 'Brasil' }), captura: { imagemId: null, faltante: true, motivo: 'x', fonte: 'confirmacao' }, em: 2000 });
+  assert.equal(faltante.acoes[0].passo.captura.fonte, 'confirmacao');
+  assert.equal(faltante.acoes[0].passo.captura.faltante, true);
+});
+
 test('contador e numeração dos marcadores acompanham os passos criados', () => {
   let r = reduzir(criarEstadoRedutor(), { tipo: 'NAVEGACAO_CAPTURADA', url: 'https://a.b/', transicao: 'inicio', captura: capturaOk(), em: 1 });
   r = reduzir(r.estado, preClique({ em: 1000 }));
