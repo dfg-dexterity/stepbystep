@@ -31,6 +31,18 @@ public func lerDataIso(_ texto: String) -> Date? {
   return formatadorSemFracao.date(from: texto)
 }
 
+/// Data truncada ao milissegundo — a precisão do formato. Toda data que entra no guia passa por aqui,
+/// para que codificar e reler devolvam exatamente o mesmo valor (igualdade de structs nos testes).
+/// A ida e volta pelo próprio formatador garante o mesmo Double que a leitura do JSON produz.
+public func truncarAoMilissegundo(_ data: Date) -> Date {
+  return lerDataIso(formatarDataIso(data)) ?? data
+}
+
+/// `Date()` já truncada ao milissegundo.
+public func agoraComMilissegundos() -> Date {
+  return truncarAoMilissegundo(Date())
+}
+
 // MARK: - Geometria (px da imagem original)
 
 public struct Rect: Codable, Equatable {
@@ -517,7 +529,7 @@ public struct Passo: Codable, Equatable {
 
   /// Passo vazio do Mac: `titulo: ""` + `tituloAuto: true` ("gere para mim"), criado agora.
   public static func novo(tipo: String) -> Passo {
-    return Passo(id: gerarId("p"), tipo: tipo, titulo: "", tituloAuto: true, descricao: "", criadoEm: Date(),
+    return Passo(id: gerarId("p"), tipo: tipo, titulo: "", tituloAuto: true, descricao: "", criadoEm: agoraComMilissegundos(),
                  contexto: nil, evento: nil, alvo: nil, captura: nil, resultado: nil, anotacoes: [], mescladoDe: nil)
   }
 
@@ -642,7 +654,7 @@ public struct Guia: Codable, Equatable {
 
   /// Guia novo de uma gravação no Mac: `origem.tipo = "mac"`, estado `gravando`, sem passos.
   public static func novo(app: String, versaoApp: String = "0.1.0") -> Guia {
-    let agora = Date()
+    let agora: Date = agoraComMilissegundos()
     let titulo: String = app.isEmpty ? "Gravação" : "Gravação — " + app
     return Guia(formato: FORMATO_GUIA, versao: VERSAO_GUIA, id: gerarId("g"), titulo: titulo, descricao: "",
                 idioma: "pt-BR", autor: "", criadoEm: agora, atualizadoEm: agora,
@@ -666,7 +678,7 @@ public struct Guia: Codable, Equatable {
   /// Anexa um passo, marca `atualizadoEm` e atualiza `imagens`.
   public mutating func anexar(_ passo: Passo) {
     passos.append(passo)
-    atualizadoEm = Date()
+    atualizadoEm = agoraComMilissegundos()
     atualizarImagens()
   }
 
@@ -675,7 +687,7 @@ public struct Guia: Codable, Equatable {
   public mutating func atualizar(passoId: String, _ alteracao: (inout Passo) -> Void) -> Bool {
     guard let indice = passos.firstIndex(where: { $0.id == passoId }) else { return false }
     alteracao(&passos[indice])
-    atualizadoEm = Date()
+    atualizadoEm = agoraComMilissegundos()
     atualizarImagens()
     return true
   }

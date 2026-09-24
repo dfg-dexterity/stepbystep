@@ -184,7 +184,7 @@ final class Persistencia {
       }
     }
     guia.estado = "concluido"
-    guia.atualizadoEm = Date()
+    guia.atualizadoEm = agoraComMilissegundos()
     guia.atualizarImagens()
     try guia.json().write(to: urlGuide, options: .atomic)
     return guia

@@ -291,7 +291,7 @@ final class Gravador {
     estado = .parado
     monitor?.habilitar(true)   // continua ouvindo só o atalho ⌥⇧R
     guia?.estado = "concluido"
-    guia?.atualizadoEm = Date()
+    guia?.atualizadoEm = agoraComMilissegundos()
     salvarGuia()
     let armazenamento: Persistencia? = persistencia
     persistencia = nil
