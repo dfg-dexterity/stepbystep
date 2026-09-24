@@ -70,6 +70,8 @@ jobs:
     continue-on-error: false
     defaults:
       run:
+        # `bash` explícito = `bash -eo pipefail`: sem isso `swift build | tee` engole o erro de compilação
+        shell: bash
         working-directory: packages/mac
     steps:
       - uses: actions/checkout@v4

@@ -114,10 +114,11 @@ final class MonitorEventos {
   }
 
   private static func caracteres(_ evento: CGEvent) -> String {
-    var comprimento: UniCharCount = 0
+    // O overlay Swift importa UniCharCount (unsigned long) como Int.
+    var comprimento: Int = 0
     var buffer: [UniChar] = [UniChar](repeating: 0, count: 8)
-    evento.keyboardGetUnicodeString(maxStringLength: UniCharCount(8), actualStringLength: &comprimento, unicodeString: &buffer)
+    evento.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &comprimento, unicodeString: &buffer)
     if comprimento <= 0 { return "" }
-    return String(utf16CodeUnits: buffer, count: Int(comprimento))
+    return String(utf16CodeUnits: buffer, count: min(comprimento, buffer.count))
   }
 }
