@@ -1,0 +1,48 @@
+/*
+ * Fontes locais do editor (woff2, subconjunto latin, licença OFL) — servidas junto
+ * com o editor para funcionar offline e dentro da extensão, sem chamada externa.
+ * dexterity.css referencia as famílias por nome; o fallback de sistema cobre a
+ * ausência de qualquer arquivo.
+ */
+@font-face {
+  font-family: 'Barlow Condensed';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fontes/BarlowCondensed-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow Condensed';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('fontes/BarlowCondensed-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fontes/Figtree-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('fontes/Figtree-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fontes/IBMPlexMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('fontes/IBMPlexMono-Medium.woff2') format('woff2');
+}

@@ -1,0 +1,510 @@
+{
+  "formato": "stepbystep/guia",
+  "versao": 1,
+  "id": "g_m1x7q2mac0aa",
+  "titulo": "Gravação — SAP GUI",
+  "descricao": "",
+  "idioma": "pt-BR",
+  "autor": "",
+  "criadoEm": "2026-09-24T17:12:00.000Z",
+  "atualizadoEm": "2026-09-24T17:14:30.000Z",
+  "origem": {
+    "tipo": "mac",
+    "versao": "0.1.0",
+    "plataforma": "macOS 15.0"
+  },
+  "estilo": {
+    "cor": "cerceta",
+    "escurecerFora": true
+  },
+  "estado": "concluido",
+  "publicacoes": [],
+  "passos": [
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [],
+      "id": "p_m1x7q2mac01a",
+      "tipo": "navegar",
+      "criadoEm": "2026-09-24T17:12:01.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "SAP Easy Access",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "app": "SAP GUI"
+      },
+      "alvo": null,
+      "captura": {
+        "imagemId": "img_m1x7q2mac01a",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "navegacao",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [
+        {
+          "id": "a_m1x7q2mac02a1",
+          "tipo": "recorte",
+          "auto": true,
+          "x": 160,
+          "y": 0,
+          "w": 3000,
+          "h": 1990
+        }
+      ],
+      "id": "p_m1x7q2mac02b",
+      "tipo": "clicar",
+      "criadoEm": "2026-09-24T17:12:08.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "SAP Easy Access",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "botao": "esquerdo",
+        "vezes": 1,
+        "modificadores": []
+      },
+      "alvo": {
+        "papel": "menuitem",
+        "papelNativo": "AXMenuItem",
+        "rotulo": "Novo",
+        "fonteRotulo": "ax",
+        "campo": null,
+        "tag": null,
+        "tipoInput": null,
+        "seletor": null,
+        "rectCss": {
+          "x": 96,
+          "y": 58,
+          "w": 200,
+          "h": 22
+        },
+        "bbox": {
+          "x": 192,
+          "y": 116,
+          "w": 400,
+          "h": 44
+        },
+        "ponto": {
+          "x": 260,
+          "y": 138
+        },
+        "frame": null,
+        "menu": "Arquivo › Novo",
+        "janelaBbox": {
+          "x": 160,
+          "y": 90,
+          "w": 3000,
+          "h": 1900
+        }
+      },
+      "captura": {
+        "imagemId": "img_m1x7q2mac02b",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "pointerdown",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [
+        {
+          "id": "a_m1x7q2mac03a1",
+          "tipo": "recorte",
+          "auto": true,
+          "x": 160,
+          "y": 90,
+          "w": 3000,
+          "h": 1900
+        }
+      ],
+      "id": "p_m1x7q2mac03c",
+      "tipo": "clicar",
+      "criadoEm": "2026-09-24T17:12:15.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "ME21N — Criar pedido",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "botao": "esquerdo",
+        "vezes": 1,
+        "modificadores": []
+      },
+      "alvo": {
+        "papel": "button",
+        "papelNativo": "AXButton",
+        "rotulo": "Executar",
+        "fonteRotulo": "ax",
+        "campo": null,
+        "tag": null,
+        "tipoInput": null,
+        "seletor": null,
+        "rectCss": {
+          "x": 240,
+          "y": 140,
+          "w": 90,
+          "h": 26
+        },
+        "bbox": {
+          "x": 480,
+          "y": 280,
+          "w": 180,
+          "h": 52
+        },
+        "ponto": {
+          "x": 570,
+          "y": 306
+        },
+        "frame": null,
+        "menu": null,
+        "janelaBbox": {
+          "x": 160,
+          "y": 90,
+          "w": 3000,
+          "h": 1900
+        }
+      },
+      "captura": {
+        "imagemId": "img_m1x7q2mac03c",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "pointerdown",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [
+        {
+          "id": "a_m1x7q2mac04a1",
+          "tipo": "recorte",
+          "auto": true,
+          "x": 160,
+          "y": 90,
+          "w": 3000,
+          "h": 1900
+        }
+      ],
+      "id": "p_m1x7q2mac04d",
+      "tipo": "digitar",
+      "criadoEm": "2026-09-24T17:12:31.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "ME21N — Criar pedido",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "valor": "4500001234",
+        "sensivel": false,
+        "motivo": null,
+        "confirmadoPor": "enter"
+      },
+      "alvo": {
+        "papel": "textbox",
+        "papelNativo": "AXTextField",
+        "rotulo": "Pedido",
+        "fonteRotulo": "ax",
+        "campo": "Pedido",
+        "tag": null,
+        "tipoInput": null,
+        "seletor": null,
+        "rectCss": {
+          "x": 300,
+          "y": 260,
+          "w": 220,
+          "h": 24
+        },
+        "bbox": {
+          "x": 600,
+          "y": 520,
+          "w": 440,
+          "h": 48
+        },
+        "ponto": null,
+        "frame": null,
+        "menu": null,
+        "janelaBbox": {
+          "x": 160,
+          "y": 90,
+          "w": 3000,
+          "h": 1900
+        }
+      },
+      "captura": {
+        "imagemId": "img_m1x7q2mac04d",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "confirmacao",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [],
+      "id": "p_m1x7q2mac05e",
+      "tipo": "tecla",
+      "criadoEm": "2026-09-24T17:12:31.200Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "ME21N — Criar pedido",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "tecla": "Enter",
+        "modificadores": [],
+        "atalho": "Enter"
+      },
+      "alvo": null,
+      "captura": {
+        "imagemId": "img_m1x7q2mac04d",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "compartilhada",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [],
+      "id": "p_m1x7q2mac06f",
+      "tipo": "tecla",
+      "criadoEm": "2026-09-24T17:13:02.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "ME21N — Criar pedido",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "tecla": "S",
+        "modificadores": [
+          "Meta"
+        ],
+        "atalho": "⌘S"
+      },
+      "alvo": null,
+      "captura": {
+        "imagemId": "img_m1x7q2mac06f",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "pointerdown",
+        "faltante": false
+      }
+    },
+    {
+      "titulo": "",
+      "tituloAuto": true,
+      "descricao": "",
+      "resultado": null,
+      "anotacoes": [
+        {
+          "id": "a_m1x7q2mac07a1",
+          "tipo": "recorte",
+          "auto": true,
+          "x": 1100,
+          "y": 800,
+          "w": 1200,
+          "h": 600
+        }
+      ],
+      "id": "p_m1x7q2mac07g",
+      "tipo": "digitar",
+      "criadoEm": "2026-09-24T17:14:20.000Z",
+      "contexto": {
+        "app": "SAP GUI",
+        "bundleId": "com.sap.platin",
+        "janela": "Autenticação",
+        "tela": {
+          "id": 2,
+          "largura": 1728,
+          "altura": 1117,
+          "escala": 2
+        }
+      },
+      "evento": {
+        "valor": null,
+        "sensivel": true,
+        "motivo": "AXSecureTextField",
+        "confirmadoPor": "tempo"
+      },
+      "alvo": {
+        "papel": "textbox",
+        "papelNativo": "AXSecureTextField",
+        "rotulo": "Senha",
+        "fonteRotulo": "ax",
+        "campo": "Senha",
+        "tag": null,
+        "tipoInput": null,
+        "seletor": null,
+        "rectCss": {
+          "x": 700,
+          "y": 500,
+          "w": 260,
+          "h": 24
+        },
+        "bbox": {
+          "x": 1400,
+          "y": 1000,
+          "w": 520,
+          "h": 48
+        },
+        "ponto": null,
+        "frame": null,
+        "menu": null,
+        "janelaBbox": {
+          "x": 1100,
+          "y": 800,
+          "w": 1200,
+          "h": 600
+        }
+      },
+      "captura": {
+        "imagemId": "img_m1x7q2mac07g",
+        "largura": 3456,
+        "altura": 2234,
+        "dpr": 2,
+        "viewport": {
+          "largura": 1728,
+          "altura": 1117
+        },
+        "escala": 2,
+        "fonte": "confirmacao",
+        "faltante": false
+      }
+    }
+  ],
+  "imagens": {
+    "img_m1x7q2mac01a": {
+      "arquivo": "imagens/img_m1x7q2mac01a.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    },
+    "img_m1x7q2mac02b": {
+      "arquivo": "imagens/img_m1x7q2mac02b.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    },
+    "img_m1x7q2mac03c": {
+      "arquivo": "imagens/img_m1x7q2mac03c.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    },
+    "img_m1x7q2mac04d": {
+      "arquivo": "imagens/img_m1x7q2mac04d.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    },
+    "img_m1x7q2mac06f": {
+      "arquivo": "imagens/img_m1x7q2mac06f.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    },
+    "img_m1x7q2mac07g": {
+      "arquivo": "imagens/img_m1x7q2mac07g.png",
+      "largura": 3456,
+      "altura": 2234,
+      "mime": "image/png"
+    }
+  }
+}

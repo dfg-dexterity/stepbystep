@@ -1,0 +1,131 @@
+/*
+ * Documento exportado (HTML autocontido) e impressão / PDF.
+ * Vai inline no <style> do HTML gerado por exportar-html.js, logo depois do
+ * dexterity.css: aqui ficam o layout do manual (.stepbystep-exportado) e as
+ * regras de página. Na tela mantém o tema escuro Dexterity; no papel vira
+ * fundo branco com tinta base — cantos retos, fio de 1px, sem sombra.
+ */
+
+/* ---------------------------- documento na tela ---------------------------- */
+.stepbystep-exportado { font-weight: 400; }
+.stepbystep-exportado .cabecalho,
+.stepbystep-exportado main,
+.stepbystep-exportado .rodape {
+  width: min(880px, 92vw);
+  margin-inline: auto;
+}
+.stepbystep-exportado .cabecalho {
+  padding: 40px 0 24px;
+  border-bottom: 1px solid var(--dxt-line);
+}
+.stepbystep-exportado .marca svg { height: 27px; width: auto; display: block; }
+.stepbystep-exportado .cabecalho h1 {
+  margin-top: 24px;
+  font-size: clamp(2rem, 5vw, 3rem);
+  overflow-wrap: anywhere;
+}
+.stepbystep-exportado .descricao { margin: 16px 0 0; max-width: 60ch; color: var(--dxt-muted); }
+.stepbystep-exportado .meta {
+  margin: 12px 0 0;
+  font-family: var(--dxt-font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dxt-rotulo);
+}
+.stepbystep-exportado .no-print {
+  margin-top: 20px;
+  min-height: 36px;
+  padding: 8px 16px;
+  border: 1px solid var(--dxt-cerceta);
+  background: var(--dxt-cerceta);
+  color: var(--dxt-base);
+  font-family: var(--dxt-font-display);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 0;
+  cursor: pointer;
+}
+.stepbystep-exportado .no-print:hover { background: transparent; color: var(--dxt-cerceta); }
+
+.stepbystep-exportado ol.passos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stepbystep-exportado li.passo,
+.stepbystep-exportado li.secao {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--dxt-line);
+}
+.stepbystep-exportado li.passo h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 1.375rem;
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.stepbystep-exportado li.passo h2 .numero {
+  flex: none;
+  min-width: 2.2em;
+  font-family: var(--dxt-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--dxt-acc-txt);
+}
+.stepbystep-exportado li.passo h2 .numero::before { content: 'Passo '; }
+.stepbystep-exportado li.secao h2.secao {
+  font-size: 1.75rem;
+  color: var(--dxt-acc-txt);
+}
+.stepbystep-exportado li p { margin: 10px 0 0; max-width: 70ch; color: var(--dxt-muted); }
+.stepbystep-exportado li.passo img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 16px;
+  border: 1px solid var(--dxt-line);
+}
+.stepbystep-exportado .rodape {
+  padding: 24px 0 48px;
+  font-family: var(--dxt-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dxt-rotulo);
+}
+
+/* ------------------------------- impressão -------------------------------- */
+@page { size: A4; margin: 15mm; }
+
+@media print {
+  /* esconde a interface (do editor e do documento) */
+  .no-print, .app-topbar, .app-rodape, .editor-abas, #avisos, .dialogo { display: none !important; }
+
+  html, body { background: #fff !important; color: #1B1B1B !important; }
+  .stepbystep-exportado .cabecalho,
+  .stepbystep-exportado main,
+  .stepbystep-exportado .rodape { width: auto; margin: 0; }
+  .stepbystep-exportado .cabecalho { padding: 0 0 16px; border-bottom: 1px solid #1B1B1B; }
+  .stepbystep-exportado .marca svg { --mk: #1B1B1B; }
+  .stepbystep-exportado .cabecalho h1 { font-size: 26pt; color: #1B1B1B; }
+  .stepbystep-exportado .descricao, .stepbystep-exportado li p { color: #3a3a3a; }
+  .stepbystep-exportado .meta, .stepbystep-exportado .rodape { color: #6b6b6b; }
+  .stepbystep-exportado li.passo,
+  .stepbystep-exportado li.secao { padding: 14px 0; border-bottom: 1px solid #d9d9d9; }
+  .stepbystep-exportado li.passo h2 { font-size: 13pt; color: #1B1B1B; }
+  .stepbystep-exportado li.passo h2 .numero { color: #009994; }
+  .stepbystep-exportado li.secao h2.secao { font-size: 16pt; color: #009994; }
+  .stepbystep-exportado li.passo img { max-height: 160mm; width: auto; max-width: 100%; border-color: #d9d9d9; }
+  .stepbystep-exportado .rodape { padding: 12px 0 0; }
+
+  .passo { break-inside: avoid; page-break-inside: avoid; }
+  .secao { break-after: avoid; page-break-after: avoid; }
+  h1, h2 { break-after: avoid; page-break-after: avoid; }
+}

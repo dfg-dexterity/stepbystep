@@ -1180,3 +1180,23 @@ Interfaces que atravessam pacotes (mudança só via este documento): (1) formato
 29. Escopo — contrato congelado (este documento) e pacotes disjuntos; MVP = P1 + P2 + P3 (zip/HTML/PDF); Notion e Mac sobre o mesmo formato.
 30. Safari/Firefox — fora da v1; manifest sem APIs exclusivas; conversor da Apple depois.
 31. Gravações simultâneas (extensão + Mac) — documentar "uma de cada vez"; futuro: o Mac ignora eventos quando o app frontal é um navegador com a extensão gravando.
+
+---
+
+## Anexo A — Divergências de implementação (registradas na integração)
+
+Decisões tomadas durante a implementação que afastam o código do texto acima. Valem como emenda ao contrato;
+o texto das seções originais foi mantido para preservar o histórico das decisões.
+
+| Seção | O que mudou | Por quê |
+|---|---|---|
+| 5.6 item 5 | A barra flutuante **não** volta no `pointerup` nem ao receber a resposta de um envio isolado: o gravador conta as ocultações pendentes e só reexibe a barra quando a última resposta do SW chega (ou após 2,5 s de segurança). O SW, ao fotografar navegações, oculta e libera pela mesma contagem (`window.__sbsGravador.ocultarBarra/liberarBarra`). | A resposta ao evento A pode chegar depois que o evento B já ocultou a barra e pediu a foto; reexibir nessa hora colocava a barra na captura de B (visto no e2e). |
+| 5.4 | O SW usa `chrome.scripting.executeScript` (mesmo isolated world) para ocultar/liberar a barra em volta das capturas de navegação e para pedir o flush da digitação pendente ao parar (`window.__sbsGravador.flush('parar')`). O gravador pergunta `PEDIR_ESTADO` ao carregar e só fica ativo em abas que o SW confirma em `abas`. | Sem mensagens SW→conteúdo pelo `runtime`, mas com um canal previsível. |
+| 5.6 / 5.9 | Os passos são inseridos em ordem cronológica de `criadoEm` (= `em` do evento na página), com `renumerarMarcadores`; passo `tecla` sem digitação pendente recebe captura própria (`fonte: 'pointerdown'`); `change` num `<select>` com digitação pendente em outro campo faz o flush (`'blur'`) antes da `SELECAO`; o SW reduz `NAVEGACAO` 150 ms depois do `onCommitted` e ignora navegações anteriores a `iniciadoEm`. | Mensagens de frames filhos chegam depois de eventos posteriores do topo; automação e teclado não passam pelo `pointerdown`. |
+| 5.13 | O e2e da extensão usa **janela real**: `viewport: null`, `--window-size=1280,887`, `--force-device-scale-factor=2` (nunca `viewport`/`deviceScaleFactor` emulados). | `captureVisibleTab` fotografa a aba real; com viewport emulado a foto sai recortada e `sy` desloca os bboxes. |
+| 8.4 | O proxy exporta **só** `GET`, `POST`, `PATCH` e `OPTIONS` (sem `export default`). O dev-server despacha `modulo[req.method]`. `NOTION_BASE` e `ORIGENS_PERMITIDAS` são lidas a cada requisição; `retry-after` é repassado; falha de rede vira JSON 502/504. | O builder `@vercel/node` troca o módulo pelo `default` quando ele existe e chamaria o handler Web com `(req, res)`. |
+| 4.12 | Chave de config opcional `notion.base` (só leitura): se existir, substitui `baseNotion` no editor. | Apontar o editor a um Notion falso sem proxy, em testes manuais. |
+| 7.2 (importar) | Ao importar guias com `origem.tipo === 'mac'`, além dos títulos o editor gera as anotações automáticas (retângulo + marcador; desfoque em campo sensível) nos passos sem marcação, preservando o `recorte` gravado pelo Mac. | O Mac grava só o recorte pela janela (6.3); sem isso as imagens importadas não teriam destaque. |
+| 4.9 / 9.2 | O HTML exportado usa `<li class="passo">` (como 4.9); a menção a `section.passo` em 9.2 era um conflito interno. | — |
+| 4.5 / 4.8 | `recorteFocado` aceita `opcoes.escala`; `medidas(passo).fonteTexto` é uma função `(t) => string`. | A assinatura original não tinha como receber a escala / o placeholder `{t}` não era utilizável. |
+| 2 | `playwright` fixado em `1.56.0` exato no `package.json`. | O `^` resolvia 1.63, que procura um Chromium que não existe no ambiente de testes. |

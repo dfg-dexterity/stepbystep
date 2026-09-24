@@ -1,0 +1,109 @@
+# Confere, a partir de fora (runner do GitHub), que o site publicado na Vercel
+# serve exatamente os arquivos do repositório: /api/hash devolve o SHA-256 de
+# cada arquivo estático e comparamos com `sha256sum` local. Roda quando a Vercel
+# conclui o deploy de produção do projeto stepbystep-dexterity e também
+# manualmente (Actions › Verificar publicação › Run workflow).
+name: Verificar publicação
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Host publicado, sem https:// (padrão: produção na Vercel)"
+        required: false
+        default: stepbystep-dexterity.vercel.app
+  deployment_status:
+
+permissions:
+  contents: read
+
+env:
+  PROJETO: stepbystep-dexterity
+
+jobs:
+  verificar:
+    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ inputs.host || 'stepbystep-dexterity.vercel.app' }}
+    steps:
+      - name: Contexto do evento
+        id: ctx
+        env:
+          EVENTO: ${{ github.event_name }}
+          AMBIENTE: ${{ github.event.deployment.environment }}
+          ESTADO: ${{ github.event.deployment_status.state }}
+          DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
+        run: |
+          echo "evento: $EVENTO  ambiente: '$AMBIENTE'  estado: '$ESTADO'  deploy: $DEPLOY_URL"
+          # Só o deploy do projeto principal (a URL única do deploy começa pelo nome do projeto)
+          # dispara a conferência; previews e projetos duplicados são ignorados.
+          case "$EVENTO:$DEPLOY_URL" in
+            workflow_dispatch:*|deployment_status:https://$PROJETO-*)
+              echo "verificar=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "Nada a verificar para este deploy."
+              echo "verificar=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: actions/checkout@v4
+        if: steps.ctx.outputs.verificar == 'true'
+        with:
+          ref: ${{ github.event.deployment.sha || github.sha }}
+
+      - name: Arquivos publicados idênticos ao repositório (/api/hash)
+        if: steps.ctx.outputs.verificar == 'true'
+        run: |
+          echo "host: $HOST  commit: $(git rev-parse --short HEAD)"
+          falhas=0
+          # "caminho no repositório=caminho publicado" — os rewrites do vercel.json
+          # levam /editor/* a packages/editor/* e /core/* a packages/core/*.
+          for par in \
+            packages/editor/app.js=/editor/app.js \
+            packages/core/modelo.js=/core/modelo.js \
+            packages/editor/index.html=/editor/index.html \
+            packages/editor/app.css=/editor/app.css \
+            packages/editor/dexterity.css=/editor/dexterity.css \
+            packages/core/notion-cliente.js=/core/notion-cliente.js \
+            packages/core/notion-blocos.js=/core/notion-blocos.js \
+            packages/core/armazenamento.js=/core/armazenamento.js; do
+            f="${par%%=*}"; caminho="${par#*=}"
+            if [ ! -f "$f" ]; then
+              echo "SKIP  $f (não existe no repositório)"
+              continue
+            fi
+            esperado=$(sha256sum "$f" | cut -c1-64)
+            resposta=$(curl -sS --max-time 60 "https://$HOST/api/hash?path=$caminho" || true)
+            obtido=$(printf '%s' "$resposta" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p')
+            if [ "$obtido" = "$esperado" ]; then
+              echo "OK    $f  ($caminho)"
+            else
+              echo "DIFF  $f  ($caminho)"
+              echo "      esperado: $esperado"
+              echo "      resposta: $resposta"
+              falhas=$((falhas + 1))
+            fi
+          done
+          echo "falhas: $falhas"
+          test "$falhas" -eq 0
+
+      - name: Funções /api respondem (proxy do Notion sem credencial)
+        if: steps.ctx.outputs.verificar == 'true'
+        run: |
+          falhas=0
+          conferir() {  # conferir <descrição> <status esperado> <curl args...>
+            desc="$1"; esperado="$2"; shift 2
+            obtido=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "$@" || echo "000")
+            if [ "$obtido" = "$esperado" ]; then echo "OK    $desc → $obtido"; else echo "FALHA $desc → $obtido (esperado $esperado)"; falhas=$((falhas + 1)); fi
+          }
+          # preflight do editor hospedado
+          conferir "OPTIONS /api/notion/v1/pages" 204 -X OPTIONS -H "Origin: https://$HOST" "https://$HOST/api/notion/v1/pages"
+          # allow-list: rota fora da lista é barrada no proxy, sem chegar ao Notion
+          conferir "POST /api/notion/v1/databases (403)" 403 -X POST "https://$HOST/api/notion/v1/databases"
+          conferir "DELETE /api/notion/v1/pages (403)" 403 -X DELETE "https://$HOST/api/notion/v1/pages"
+          # rota permitida sem token: o Notion real responde 401 — prova que o proxy repassa
+          conferir "GET /api/notion/v1/users/me sem token (401 do Notion)" 401 "https://$HOST/api/notion/v1/users/me"
+          echo "--- cabeçalhos do preflight"
+          curl -sS -D - -o /dev/null -X OPTIONS -H "Origin: https://$HOST" "https://$HOST/api/notion/v1/pages" | grep -i -E 'access-control|cache-control|vary' || true
+          echo "falhas: $falhas"
+          test "$falhas" -eq 0

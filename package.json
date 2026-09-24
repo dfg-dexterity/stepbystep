@@ -4,7 +4,9 @@
   "private": true,
   "description": "StepByStep — manuais passo a passo capturados automaticamente no navegador e no Mac, com editor e publicação no Notion — Dexterity IT Solutions",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test tests/core/*.test.mjs tests/extensao/*.test.mjs tests/api/*.test.mjs tests/sincronizacao.test.mjs",
     "test:e2e": "npm run sincronizar && node --test --test-concurrency=1 tests/e2e/*.e2e.mjs",
@@ -13,5 +15,7 @@
     "empacotar": "npm run sincronizar && node scripts/empacotar-extensao.mjs",
     "fixtures": "node scripts/gerar-fixtures.mjs"
   },
-  "devDependencies": { "playwright": "^1.56.0" }
+  "devDependencies": {
+    "playwright": "1.56.0"
+  }
 }
