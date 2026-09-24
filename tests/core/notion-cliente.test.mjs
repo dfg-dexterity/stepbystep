@@ -2,10 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   VERSAO_NOTION, ROTAS_PERMITIDAS, LIMITE_UPLOAD_PROXY, LIMITE_UPLOAD_DIRETO, URL_EDITOR,
-  criarClienteNotion, traduzirErroNotion, ErroNotion,
+  criarClienteNotion, traduzirErroNotion, ErroNotion, publicacaoRetomavel, idNotionValido, urlNotionValida,
 } from '../../packages/core/notion-cliente.js';
 import { criarGuia, criarPasso } from '../../packages/core/modelo.js';
 import { lerFixture } from './util.mjs';
+
+// ids como o Notion devolve (uuid); a retomada só aceita esse formato
+const PAGINA_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+const URL_PAGINA = `https://www.notion.so/Manual-${PAGINA_ID.replace(/-/g, '')}`;
 
 const json = (corpo, status = 200, headers = {}) => new Response(JSON.stringify(corpo), { status, headers: { 'content-type': 'application/json', ...headers } });
 
@@ -31,7 +35,7 @@ function fetchFalso(respostas = {}) {
     if (rota === '/v1/search') return json({ results: [] });
     if (rota === '/v1/file_uploads') return json({ id: `up-${++contadorUpload}`, upload_url: `https://api.notion.com/v1/file_uploads/up-${contadorUpload}/send`, status: 'pending', expiry_time: '2026-09-24T15:00:00.000Z' });
     if (/^\/v1\/file_uploads\/[^/]+\/send$/.test(rota)) return json({ status: 'uploaded' });
-    if (rota === '/v1/pages') return json({ id: 'pagina-1', url: 'https://www.notion.so/pagina-1' });
+    if (rota === '/v1/pages') return json({ id: PAGINA_ID, url: URL_PAGINA });
     if (/^\/v1\/blocks\/[^/]+\/children$/.test(rota)) return json({ results: [] });
     return json({ code: 'object_not_found', message: 'rota desconhecida' }, 404);
   };
@@ -94,8 +98,8 @@ test('publicarGuia: sequência users/me → file_uploads → send multipart → 
     aoProgredir: (p) => progresso.push({ fase: p.fase, atual: p.atual, total: p.total }),
     data: new Date('2026-09-24T12:00:00Z'),
   });
-  assert.equal(r.paginaId, 'pagina-1');
-  assert.equal(r.url, 'https://www.notion.so/pagina-1');
+  assert.equal(r.paginaId, PAGINA_ID);
+  assert.equal(r.url, URL_PAGINA);
   const rotas = f.chamadas.map((c) => `${c.metodo} ${c.rota}`);
   assert.equal(rotas[0], 'GET /v1/users/me');
   // 8 passos com imagem → 8 pares upload/send, depois a página (um só lote: 12 blocos)
@@ -220,13 +224,13 @@ test('retomada: reaproveita paginaId e uploads recentes, sem novo POST /v1/pages
   guia.passos[0].captura = { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false };
   guia.passos[110].captura = { imagemId: 'img_m1x4k9zr02ab', largura: 1, altura: 1, faltante: false };
   // primeira tentativa: o PATCH do segundo lote falha
-  const f = fetchFalso({ '/v1/blocks/pagina-1/children': [json({}, 500), json({}, 500), json({}, 500), json({}, 500)] });
+  const f = fetchFalso({ [`/v1/blocks/${PAGINA_ID}/children`]: [json({}, 500), json({}, 500), json({}, 500), json({}, 500)] });
   const obter = async () => blobPng(10);
   let falha;
   await cliente(f).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: obter }).catch((e) => { falha = e; });
   assert.ok(falha instanceof ErroNotion);
   const parcial = falha.publicacao;
-  assert.equal(parcial.paginaId, 'pagina-1');
+  assert.equal(parcial.paginaId, PAGINA_ID);
   assert.equal(parcial.lotesEnviados, 1);
   assert.equal(parcial.concluida, false);
   assert.deepEqual(Object.values(parcial.uploads), ['up-1', 'up-2']);
@@ -238,10 +242,11 @@ test('retomada: reaproveita paginaId e uploads recentes, sem novo POST /v1/pages
   const progresso = [];
   const r = await cliente(f2).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => { throw new Error('não deveria assar de novo'); }, publicacaoAnterior: parcial, aoProgredir: (p) => progresso.push(p.fase) });
   const rotas2 = f2.chamadas.map((c) => `${c.metodo} ${c.rota}`);
-  assert.deepEqual(rotas2, ['PATCH /v1/blocks/pagina-1/children']);
+  assert.deepEqual(rotas2, [`PATCH /v1/blocks/${PAGINA_ID}/children`]);
   assert.equal(f2.chamadas[0].json.children.length, 21);
   assert.equal(f2.chamadas[0].json.children.at(-10).numbered_list_item.children[0].image.file_upload.id, 'up-2');
-  assert.equal(r.paginaId, 'pagina-1');
+  assert.equal(r.paginaId, PAGINA_ID);
+  assert.equal(r.url, URL_PAGINA);
   assert.equal(r.publicacao.concluida, true);
   assert.equal(r.publicacao.lotesEnviados, 2);
   assert.deepEqual(progresso, ['blocos']);
@@ -250,11 +255,50 @@ test('retomada: reaproveita paginaId e uploads recentes, sem novo POST /v1/pages
   const f3 = fetchFalso();
   await cliente(f3).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: obter, publicacaoAnterior: velha });
   const rotas3 = f3.chamadas.map((c) => `${c.metodo} ${c.rota}`);
-  assert.deepEqual(rotas3, ['POST /v1/file_uploads', 'POST /v1/file_uploads/up-1/send', 'PATCH /v1/blocks/pagina-1/children']);
+  assert.deepEqual(rotas3, ['POST /v1/file_uploads', 'POST /v1/file_uploads/up-1/send', `PATCH /v1/blocks/${PAGINA_ID}/children`]);
   // publicação concluída não é retomada: cria página nova
   const f4 = fetchFalso();
   await cliente(f4).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: obter, publicacaoAnterior: { ...parcial, concluida: true } });
   assert.ok(f4.chamadas.some((c) => c.rota === '/v1/pages'));
+});
+
+test('publicacaoRetomavel: só retoma com paginaId no formato do Notion; url fora do Notion vira o link canônico', () => {
+  for (const id of [PAGINA_ID, PAGINA_ID.replace(/-/g, '')]) assert.ok(idNotionValido(id), id);
+  for (const id of ['abc/children?x=', 'pagina-1', '../pages', PAGINA_ID.toUpperCase(), '', null, 12]) assert.ok(!idNotionValido(id), String(id));
+  assert.ok(urlNotionValida(URL_PAGINA));
+  for (const u of ['https://phishing.example', 'javascript:alert(1)', 'https://www.notion.so.evil.com/x', 'http://www.notion.so/x', null]) assert.ok(!urlNotionValida(u), String(u));
+
+  const boa = { destino: 'notion', paginaId: PAGINA_ID, url: URL_PAGINA, em: '2026-09-24T12:00:00.000Z', concluida: false, uploads: { p_1: 'up-1' }, lotesEnviados: 1 };
+  assert.deepEqual(publicacaoRetomavel(boa), boa);
+  assert.equal(publicacaoRetomavel({ ...boa, paginaId: 'abc/children?x=' }), null);
+  assert.equal(publicacaoRetomavel({ ...boa, concluida: true }), null);
+  assert.equal(publicacaoRetomavel({ ...boa, destino: 'pdf' }), null);
+  assert.equal(publicacaoRetomavel(null), null);
+  assert.equal(publicacaoRetomavel('x'), null);
+  const saneada = publicacaoRetomavel({ ...boa, url: 'https://phishing.example', em: 'ontem', uploads: ['x'], lotesEnviados: '7' });
+  assert.deepEqual(saneada, { ...boa, url: `https://www.notion.so/${PAGINA_ID.replace(/-/g, '')}`, em: null, uploads: {}, lotesEnviados: 0 });
+});
+
+test('publicarGuia: publicação anterior adulterada (guide.json de terceiros) não entra na rota nem no link', async () => {
+  const guia = criarGuia({ titulo: 'Importado' });
+  guia.passos.push(criarPasso({ tipo: 'manual', titulo: 'Passo 1', tituloAuto: false }));
+  const adulterada = { destino: 'notion', paginaId: 'abc/children?x=', url: 'https://phishing.example', em: new Date().toISOString(), concluida: false, uploads: {}, lotesEnviados: 1 };
+  // paginaId fora do formato: nada é retomado — cria página nova em vez de anexar a um alvo arbitrário
+  const f = fetchFalso();
+  const r = await cliente(f).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => null, publicacaoAnterior: adulterada });
+  assert.deepEqual(f.chamadas.map((c) => `${c.metodo} ${c.rota}`), ['POST /v1/pages']);
+  assert.ok(f.chamadas.every((c) => !c.url.includes('abc')));
+  assert.equal(r.paginaId, PAGINA_ID);
+  assert.equal(r.url, URL_PAGINA);
+  // paginaId válido com url de fora: retoma, mas o link passa a ser o canônico do Notion
+  const f2 = fetchFalso();
+  const r2 = await cliente(f2).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => null, publicacaoAnterior: { ...adulterada, paginaId: PAGINA_ID, lotesEnviados: 0 } });
+  assert.deepEqual(f2.chamadas.map((c) => `${c.metodo} ${c.rota}`), [`PATCH /v1/blocks/${PAGINA_ID}/children`]);
+  assert.equal(r2.url, `https://www.notion.so/${PAGINA_ID.replace(/-/g, '')}`);
+  // anexarBlocos nunca monta rota com id fora do formato
+  const f3 = fetchFalso();
+  await assert.rejects(cliente(f3).anexarBlocos('abc/children?x=', []), /Id de página do Notion inválido/);
+  assert.equal(f3.chamadas.length, 0);
 });
 
 test('janelas de 30 uploads seguidas de criação/anexo', async () => {
@@ -265,7 +309,7 @@ test('janelas de 30 uploads seguidas de criação/anexo', async () => {
   const rotas = f.chamadas.map((c) => `${c.metodo} ${c.rota}`);
   const iPagina = rotas.indexOf('POST /v1/pages');
   assert.equal(rotas.slice(0, iPagina).filter((x) => x === 'POST /v1/file_uploads').length, 30);
-  const iPatch = rotas.indexOf('PATCH /v1/blocks/pagina-1/children');
+  const iPatch = rotas.indexOf(`PATCH /v1/blocks/${PAGINA_ID}/children`);
   assert.equal(rotas.slice(iPagina + 1, iPatch).filter((x) => x === 'POST /v1/file_uploads').length, 5);
   assert.equal(rotas.length, 35 * 2 + 2);
   assert.equal(f.chamadas[iPagina].json.children.length, 31);   // callout + 30

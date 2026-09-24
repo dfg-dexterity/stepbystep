@@ -162,6 +162,9 @@ textarea.dxt-input { resize: vertical; line-height: 1.45; font-weight: 400; }
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.005em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;   /* título longo em tela estreita: reticências fora do foco; ao focar o texto rola */
 }
 .editor-titulo:hover { border-color: var(--dxt-line); }
 .editor-titulo:focus { border-color: var(--dxt-cerceta); outline: none; }

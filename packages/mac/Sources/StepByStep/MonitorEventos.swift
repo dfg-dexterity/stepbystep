@@ -1,7 +1,9 @@
 // CGEventTap listen-only na sessão: mouse down, keyDown e flagsChanged. O callback C nunca bloqueia —
 // copia os campos do evento e despacha para uma fila serial. Se o sistema desabilitar o tap (callback lento
-// ou entrada do usuário), reabilita na hora.
+// ou entrada do usuário), reabilita na hora. A fonte fica no run loop principal, então o callback roda no fio
+// principal: a classe é @MainActor e o fluxo do Gravador liga/desliga o tap via MainActor.run.
 import Foundation
+import AppKit
 import CoreGraphics
 import ApplicationServices
 
@@ -14,7 +16,10 @@ struct EventoBruto {
   let cliques: Int64
   let botao: Int64
   let keycode: Int64
+  /// O que a tecla escreve com os modificadores do evento (⌃C → U+0003, ⌥S → "ß").
   let caracteres: String
+  /// O que a tecla escreve sem ⌃/⌥ (⇧ preservado): "c", "s" — o nome do atalho vem daqui.
+  let caracteresSemModificadores: String
   let repeticao: Bool
   let em: Date
 }
@@ -24,14 +29,17 @@ private func retornoTap(proxy: CGEventTapProxy, tipo: CGEventType, evento: CGEve
                         info: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
   guard let info = info else { return Unmanaged.passUnretained(evento) }
   let monitor: MonitorEventos = Unmanaged<MonitorEventos>.fromOpaque(info).takeUnretainedValue()
-  if tipo == CGEventType.tapDisabledByTimeout || tipo == CGEventType.tapDisabledByUserInput {
-    monitor.reabilitar()
-    return Unmanaged.passUnretained(evento)
+  MainActor.assumeIsolated {
+    if tipo == CGEventType.tapDisabledByTimeout || tipo == CGEventType.tapDisabledByUserInput {
+      monitor.reabilitar()
+    } else {
+      monitor.receber(tipo: tipo, evento: evento)
+    }
   }
-  monitor.receber(tipo: tipo, evento: evento)
   return Unmanaged.passUnretained(evento)
 }
 
+@MainActor
 final class MonitorEventos {
   private let fila: DispatchQueue = DispatchQueue(label: "br.com.dexterity.stepbystep.gravacao")
   private let aoReceber: (EventoBruto) -> Void
@@ -94,7 +102,7 @@ final class MonitorEventos {
     ativo = false
   }
 
-  /// Chamado no thread do run loop principal pelo callback: só copia campos e despacha.
+  /// Chamado no fio principal pelo callback: só copia campos e despacha.
   func receber(tipo: CGEventType, evento: CGEvent) {
     let ehTeclado: Bool = tipo == CGEventType.keyDown
     let bruto = EventoBruto(
@@ -105,6 +113,7 @@ final class MonitorEventos {
       botao: evento.getIntegerValueField(.mouseEventButtonNumber),
       keycode: evento.getIntegerValueField(.keyboardEventKeycode),
       caracteres: ehTeclado ? MonitorEventos.caracteres(evento) : "",
+      caracteresSemModificadores: ehTeclado ? MonitorEventos.caracteresSemModificadores(evento) : "",
       repeticao: ehTeclado && evento.getIntegerValueField(.keyboardEventAutorepeat) != 0,
       em: Date())
     let entregar: (EventoBruto) -> Void = aoReceber
@@ -113,6 +122,7 @@ final class MonitorEventos {
     }
   }
 
+  /// `keyboardGetUnicodeString` aplica os modificadores do evento (é o que o usuário digita).
   private static func caracteres(_ evento: CGEvent) -> String {
     // O overlay Swift importa UniCharCount (unsigned long) como Int.
     var comprimento: Int = 0
@@ -120,5 +130,14 @@ final class MonitorEventos {
     evento.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &comprimento, unicodeString: &buffer)
     if comprimento <= 0 { return "" }
     return String(utf16CodeUnits: buffer, count: min(comprimento, buffer.count))
+  }
+
+  /// A mesma tecla sem ⌃/⌥ (só ⇧), pelo AppKit — o equivalente a `charactersIgnoringModifiers`. Sem AppKit,
+  /// `Teclas.caractereDaTecla` cai no caractere de controle e na tabela ANSI.
+  private static func caracteresSemModificadores(_ evento: CGEvent) -> String {
+    guard let eventoAppKit = NSEvent(cgEvent: evento) else { return "" }
+    let soShift: NSEvent.ModifierFlags = eventoAppKit.modifierFlags.intersection([.shift])
+    if let texto = eventoAppKit.characters(byApplyingModifiers: soShift), !texto.isEmpty { return texto }
+    return eventoAppKit.charactersIgnoringModifiers ?? ""
   }
 }

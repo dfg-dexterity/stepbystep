@@ -55,7 +55,7 @@ Se a busca da página-mãe no editor vier vazia, ou a publicação falhar com "p
 4. Clique em **Publicar**. A barra de progresso mostra "Enviando imagem 3 de 6", "Criando página",
    "Anexando blocos 2/3". Ao terminar aparece **Abrir no Notion**.
 
-O token fica salvo neste navegador até você clicar em **Esquecer**. Ele nunca é gravado no arquivo do guia
+O token fica salvo neste navegador até você clicar em **Esquecer token**. Ele nunca é gravado no arquivo do guia
 (`.stepbystep.zip`, Markdown ou HTML), então exportar e compartilhar um guia não expõe o token.
 
 ## 4. O que o StepByStep cria na página-mãe
@@ -92,5 +92,5 @@ As imagens sobem pela File Upload API do Notion, uma a uma, e ficam hospedadas n
 ## 6. Revogar o acesso
 
 Para desligar tudo: no Notion, **···** › **Conexões** › remova a integração da página; ou em
-<https://www.notion.so/profile/integrations> apague a integração. No editor, clique em **Esquecer** para
+<https://www.notion.so/profile/integrations> apague a integração. No editor, clique em **Esquecer token** para
 apagar o token do navegador.

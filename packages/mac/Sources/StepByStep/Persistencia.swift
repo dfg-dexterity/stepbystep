@@ -1,6 +1,7 @@
 // Pasta da gravação: ~/Documents/StepByStep/<AAAA-MM-DD_HHmm>_<slug-do-app>/ com imagens/*.png,
 // eventos.ndjson (journal, uma linha por passo, sincronizado) e guide.json (reescrito atômico após cada passo).
 // Um crash perde no máximo o último passo; "Recuperar gravação" reconstrói o guide.json a partir do journal.
+// Cada gravação tem pasta própria: se o nome já existe (mesmo minuto, mesmo app), ganha o sufixo _2, _3…
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -12,6 +13,8 @@ enum ErroGravacao: Error, LocalizedError {
   case imagemNaoGravada(String)
   case dittoFalhou(Int32)
   case journalIndisponivel
+  case pastaJaExiste(String)
+  case gravacaoEmCurso
 
   var errorDescription: String? {
     switch self {
@@ -19,6 +22,8 @@ enum ErroGravacao: Error, LocalizedError {
     case .imagemNaoGravada(let nome): return "Não foi possível gravar a imagem \(nome)."
     case .dittoFalhou(let codigo): return "O ditto falhou ao compactar a gravação (código \(codigo))."
     case .journalIndisponivel: return "Não foi possível abrir eventos.ndjson para escrita."
+    case .pastaJaExiste(let nome): return "A pasta \(nome) já existe e tem um journal de outra gravação."
+    case .gravacaoEmCurso: return "Há uma gravação em curso: pare-a antes de recuperar outra."
     }
   }
 }
@@ -27,25 +32,29 @@ final class Persistencia {
   static let nomeGuide: String = "guide.json"
   static let nomeJournal: String = "eventos.ndjson"
   static let nomePastaImagens: String = "imagens"
+  static let sufixoZip: String = ".stepbystep.zip"
 
   let pasta: URL
   let pastaImagens: URL
   private let journal: FileHandle
 
-  /// Cria a pasta da gravação (data local + slug do app frontal).
+  /// Cria a pasta da gravação (data local + slug do app frontal), sempre nova: nunca reaproveita a pasta, o journal
+  /// nem o zip de uma gravação anterior do mesmo minuto.
   init(app: String, agora: Date = Date()) throws {
     let raiz: URL = Persistencia.raiz()
-    let formatador = DateFormatter()
-    formatador.locale = Locale(identifier: "en_US_POSIX")
-    formatador.dateFormat = "yyyy-MM-dd_HHmm"
-    let nome: String = formatador.string(from: agora) + "_" + Persistencia.slug(app)
+    let gerenciador: FileManager = FileManager.default
+    let base: String = PastaGravacao.nomeBase(app: app, agora: agora)
+    let nome: String = PastaGravacao.nomeLivre(base: base) { candidato in
+      gerenciador.fileExists(atPath: raiz.appendingPathComponent(candidato).path)
+        || gerenciador.fileExists(atPath: raiz.appendingPathComponent(candidato + Persistencia.sufixoZip).path)
+    }
     pasta = raiz.appendingPathComponent(nome, isDirectory: true)
     pastaImagens = pasta.appendingPathComponent(Persistencia.nomePastaImagens, isDirectory: true)
-    try FileManager.default.createDirectory(at: pastaImagens, withIntermediateDirectories: true)
+    try gerenciador.createDirectory(at: pastaImagens, withIntermediateDirectories: true)
     let urlJournal: URL = pasta.appendingPathComponent(Persistencia.nomeJournal)
-    if !FileManager.default.fileExists(atPath: urlJournal.path) {
-      guard FileManager.default.createFile(atPath: urlJournal.path, contents: nil) else { throw ErroGravacao.journalIndisponivel }
-    }
+    // Defensivo: um journal aqui seria de outra gravação (corrida entre a checagem e a criação).
+    guard !gerenciador.fileExists(atPath: urlJournal.path) else { throw ErroGravacao.pastaJaExiste(nome) }
+    guard gerenciador.createFile(atPath: urlJournal.path, contents: nil) else { throw ErroGravacao.journalIndisponivel }
     journal = try FileHandle(forWritingTo: urlJournal)
   }
 
@@ -55,29 +64,10 @@ final class Persistencia {
     return documentos.appendingPathComponent("StepByStep", isDirectory: true)
   }
 
-  /// "SAP GUI" → "sap-gui"; sem acentos, só [a-z0-9-], ≤ 40 chars.
-  static func slug(_ texto: String) -> String {
-    let base: String = texto.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt_BR")).lowercased()
-    var saida: String = ""
-    var ultimoHifen: Bool = true
-    for caractere in base {
-      let ehAlfanumerico: Bool = caractere.isASCII && (caractere.isLetter || caractere.isNumber)
-      if ehAlfanumerico {
-        saida.append(caractere)
-        ultimoHifen = false
-      } else if !ultimoHifen {
-        saida.append("-")
-        ultimoHifen = true
-      }
-    }
-    while saida.hasSuffix("-") { saida.removeLast() }
-    if saida.count > 40 { saida = String(saida.prefix(40)) }
-    return saida.isEmpty ? "app" : saida
-  }
-
   // MARK: Escrita
 
-  /// imagens/<imagemId>.png — display inteiro em pixels reais.
+  /// imagens/<imagemId>.png — display inteiro em pixels reais. Síncrono e caro (centenas de ms em Retina):
+  /// o Gravador chama fora do fluxo de eventos.
   func gravarImagem(_ imagem: CGImage, id: String) throws {
     let url: URL = pastaImagens.appendingPathComponent(id + ".png")
     guard let destino = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
@@ -112,7 +102,7 @@ final class Persistencia {
   }
 
   static func compactar(pasta: URL) throws -> URL {
-    let zip: URL = URL(fileURLWithPath: pasta.path + ".stepbystep.zip")
+    let zip: URL = URL(fileURLWithPath: pasta.path + sufixoZip)
     if FileManager.default.fileExists(atPath: zip.path) {
       try FileManager.default.removeItem(at: zip)
     }
@@ -132,6 +122,7 @@ final class Persistencia {
   // MARK: Recuperação
 
   /// Pastas com journal cujo guide.json ainda está "gravando" (ou nem existe), mais recentes primeiro.
+  /// A gravação em curso também está "gravando": quem chama exclui `pasta` ativa (MenuBar só oferece parado).
   static func gravacoesInterrompidas() -> [URL] {
     let gerenciador = FileManager.default
     guard let itens = try? gerenciador.contentsOfDirectory(at: raiz(), includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {

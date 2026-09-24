@@ -3,7 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { iniciarServidor, resolverRewrite } from '../../scripts/dev-server.mjs';
+import { iniciarServidor, resolverRedirect, resolverRewrite } from '../../scripts/dev-server.mjs';
 import { iniciarNotionFalso } from '../../scripts/notion-falso.mjs';
 
 const RAIZ = new URL('../../', import.meta.url);
@@ -19,8 +19,16 @@ before(async () => {
 });
 after(async () => { delete process.env.NOTION_BASE; await servidor.fechar(); await notion.fechar(); });
 
+test('resolverRedirect reproduz os redirects do vercel.json', () => {
+  assert.equal(resolverRedirect('/'), '/editor/');
+  assert.equal(resolverRedirect('/editor'), '/editor/');
+  assert.equal(resolverRedirect('/editor/'), null);
+  assert.equal(resolverRedirect('/editor/app.js'), null);
+  assert.equal(resolverRedirect('/core/modelo.js'), null);
+});
+
 test('resolverRewrite reproduz o vercel.json', () => {
-  assert.equal(resolverRewrite('/editor'), 'packages/editor/index.html');
+  assert.equal(resolverRewrite('/editor'), null);   // /editor sem barra é redirect, não rewrite
   assert.equal(resolverRewrite('/editor/'), 'packages/editor/index.html');
   assert.equal(resolverRewrite('/editor/app.js'), 'packages/editor/app.js');
   assert.equal(resolverRewrite('/editor/fontes/Figtree-Regular.woff2'), 'packages/editor/fontes/Figtree-Regular.woff2');
@@ -31,10 +39,12 @@ test('resolverRewrite reproduz o vercel.json', () => {
   assert.equal(resolverRewrite('/api/hash'), null);
 });
 
-test('/ redireciona para /editor/ (não permanente)', async () => {
-  const r = await fetch(url('/'), { redirect: 'manual' });
-  assert.equal(r.status, 307);
-  assert.equal(r.headers.get('location'), '/editor/');
+test('/ e /editor (sem barra) redirecionam para /editor/ (não permanente)', async () => {
+  for (const caminho of ['/', '/editor']) {
+    const r = await fetch(url(caminho), { redirect: 'manual' });
+    assert.equal(r.status, 307, caminho);
+    assert.equal(r.headers.get('location'), '/editor/', caminho);
+  }
 });
 
 test('/editor/ aponta para packages/editor/index.html (200 se existir, 404 enquanto não)', async () => {
@@ -45,8 +55,17 @@ test('/editor/ aponta para packages/editor/index.html (200 se existir, 404 enqua
   } else {
     assert.equal(r.status, 404);
   }
-  const semBarra = await fetch(url('/editor'));
-  assert.equal(semBarra.status, r.status);
+});
+
+test('os recursos relativos do index.html do editor resolvem a partir de /editor/', async (t) => {
+  if (!(await existe('packages/editor/index.html'))) return t.skip('packages/editor/index.html ainda não existe');
+  const html = await readFile(new URL('packages/editor/index.html', RAIZ), 'utf8');
+  const relativos = [...html.matchAll(/\b(?:href|src)="([^"#/][^"]*)"/g)].map((m) => m[1]).filter((c) => !c.includes(':'));   // só caminhos relativos (sem esquema)
+  assert.ok(relativos.some((c) => c.endsWith('app.js')), 'index.html referencia app.js por caminho relativo');
+  for (const rel of relativos) {
+    const r = await fetch(new URL(rel, url('/editor/')));   // mesma resolução que o navegador faz com o documento em /editor/
+    assert.equal(r.status, 200, `/editor/${rel}`);
+  }
 });
 
 test('/core/modelo.js é servido como módulo com os bytes do repositório', async () => {

@@ -36,10 +36,13 @@ jobs:
           DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
         run: |
           echo "evento: $EVENTO  ambiente: '$AMBIENTE'  estado: '$ESTADO'  deploy: $DEPLOY_URL"
-          # Só o deploy do projeto principal (a URL única do deploy começa pelo nome do projeto)
-          # dispara a conferência; previews e projetos duplicados são ignorados.
-          case "$EVENTO:$DEPLOY_URL" in
-            workflow_dispatch:*|deployment_status:https://$PROJETO-*)
+          # A decisão é pelo AMBIENTE do deployment, nunca pela URL: as URLs de preview também começam
+          # pelo nome do projeto (https://$PROJETO-git-<branch>-…, https://$PROJETO-<hash>-…) e
+          # conferir um preview contra $HOST (produção) só produz DIFF. A Vercel preenche
+          # `deployment.environment` com "Production"/"Preview" — ou "Production – <projeto>" quando
+          # há mais de um projeto ligado ao repositório; só a produção deste projeto dispara a conferência.
+          case "$EVENTO:$AMBIENTE" in
+            workflow_dispatch:*|deployment_status:Production|deployment_status:Production\ *\ "$PROJETO")
               echo "verificar=true" >> "$GITHUB_OUTPUT" ;;
             *)
               echo "Nada a verificar para este deploy."

@@ -31,6 +31,7 @@ test('estado inicial e imutabilidade', () => {
   assert.equal(e0.urlAtual, 'https://a.b/');
   assert.equal(e0.ultimoClique, null);
   assert.equal(e0.ultimoGatilho, null);
+  assert.deepEqual(e0.sensiveis, []);
   const copia = structuredClone(e0);
   const { estado } = reduzir(e0, preClique());
   assert.deepEqual(e0, copia);
@@ -96,6 +97,83 @@ test('digitação sensível nunca guarda o valor e ganha desfoque', () => {
   assert.equal(vazado.acoes[0].passo.evento.valor, null);
 });
 
+const ALVO_CPF = { ...ALVO_NOME, rotulo: 'CPF', campo: 'CPF', seletor: '#cpf', nome: 'cpf', id: 'cpf', rectCss: { x: 350, y: 306, w: 400, h: 28 } };
+const cpfPendente = (extra = {}) => digitacaoPendente({ alvo: ALVO_CPF, valor: null, sensivel: true, motivo: 'name=cpf', ...extra });
+const desfoques = (p) => p.anotacoes.filter((a) => a.tipo === 'desfoque').map(({ x, y, w, h, bloco, auto }) => ({ x, y, w, h, bloco, auto }));
+const DESFOQUE_CPF = { x: 700, y: 612, w: 800, h: 56, bloco: 16, auto: true };
+
+test('campo sensível (texto visível) confirmado por clique: o passo clicar que compartilha a foto também recebe o desfoque', () => {
+  const { estado, acoes } = reduzir(criarEstadoRedutor(), preClique({ digitacaoPendente: cpfPendente() }));
+  const [d, c] = acoes.map((a) => a.passo);
+  assert.equal(d.tipo, 'digitar');
+  assert.equal(d.evento.valor, null);
+  assert.deepEqual(d.anotacoes.map((a) => a.tipo), ['desfoque', 'retangulo', 'marcador']);
+  assert.deepEqual(desfoques(d), [DESFOQUE_CPF]);
+  assert.equal(c.captura.imagemId, d.captura.imagemId);
+  // mesma imagem, mesmo desfoque (antes do retângulo e do marcador do botão)
+  assert.deepEqual(c.anotacoes.map((a) => a.tipo), ['desfoque', 'retangulo', 'marcador']);
+  assert.deepEqual(desfoques(c), [DESFOQUE_CPF]);
+  assert.notEqual(c.anotacoes[0].id, d.anotacoes[0].id);
+  assert.deepEqual(estado.sensiveis, [{ url: 'https://app.exemplo.com/form', frameId: 0, seletor: '#cpf', rectCss: ALVO_CPF.rectCss, scroll: { x: 0, y: 0 } }]);
+  const guia = aplicar(criarGuia({ origem: { tipo: 'extensao' } }), acoes);
+  assert.deepEqual(validarGuia(guia), { ok: true, erros: [] });
+  // Enter com digitação sensível pendente: o passo tecla (sem alvo) também é desfocado
+  const t = reduzir(criarEstadoRedutor(), { tipo: 'TECLA', mensagem: comum({ tecla: 'Enter', modificadores: [], alvo: ALVO_CPF, digitacaoPendente: cpfPendente() }), captura: capturaOk('img_m1x4k9zr05ae', 'confirmacao'), em: 3000 });
+  const [td, tt] = t.acoes.map((a) => a.passo);
+  assert.deepEqual(desfoques(td), [DESFOQUE_CPF]);
+  assert.equal(tt.tipo, 'tecla');
+  assert.deepEqual(tt.anotacoes.map((a) => a.tipo), ['desfoque']);
+  assert.deepEqual(desfoques(tt), [DESFOQUE_CPF]);
+});
+
+test('o desfoque do campo sensível acompanha as fotos seguintes da mesma página (com scroll), não de outra url', () => {
+  let r = reduzir(criarEstadoRedutor(), { tipo: 'DIGITACAO', mensagem: cpfPendente({ confirmadoPor: 'blur' }), captura: capturaOk('img_m1x4k9zr05ae', 'confirmacao'), em: 2000 });
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF]);
+  // clique noutro botão, foto nova, mesma página
+  r = reduzir(r.estado, preClique({ em: 3000, alvo: { ...ALVO_BOTAO, seletor: '#salvar', rotulo: 'Salvar' } }));
+  const salvar = r.acoes[0].passo;
+  assert.equal(salvar.titulo, 'Clique em «Salvar»');
+  assert.deepEqual(desfoques(salvar), [DESFOQUE_CPF]);
+  // página rolou 100 px: o desfoque sobe junto
+  r = reduzir(r.estado, preClique({ em: 4000, scroll: { x: 0, y: 100 } }));
+  assert.deepEqual(desfoques(r.acoes[0].passo), [{ ...DESFOQUE_CPF, y: 412 }]);
+  // campo fora da foto (rolou 400 px): nada a desfocar
+  r = reduzir(r.estado, preClique({ em: 5000, scroll: { x: 0, y: 400 } }));
+  assert.deepEqual(desfoques(r.acoes[0].passo), []);
+  // selecionar e marcar também recebem
+  r = reduzir(r.estado, { tipo: 'SELECAO', mensagem: comum({ alvo: { ...ALVO_NOME, papel: 'combobox', seletor: '#pais' }, valor: 'BR', opcao: 'Brasil' }), captura: capturaOk('img_m1x4k9zr07ag', 'confirmacao'), em: 6000 });
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF]);
+  r = reduzir(r.estado, { tipo: 'MARCACAO', mensagem: comum({ alvo: ALVO_CHECK, marcado: true }), captura: capturaOk(), em: 7000 });
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF]);
+  // outra url: sem desfoque; voltar à página do formulário (navegar) desfoca de novo — o navegador restaura o valor
+  r = reduzir(r.estado, preClique({ em: 8000, url: 'https://app.exemplo.com/ok' }));
+  assert.deepEqual(desfoques(r.acoes[0].passo), []);
+  r = reduzir(r.estado, { tipo: 'NAVEGACAO_CAPTURADA', url: 'https://app.exemplo.com/form', transicao: 'typed', mensagem: { tituloPagina: 'Formulário', viewport: { largura: 1440, altura: 810 }, dpr: 2 }, captura: capturaOk('img_m1x4k9zr01aa', 'navegacao'), em: 9000 });
+  assert.equal(r.acoes[0].passo.tipo, 'navegar');
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF]);
+  // captura faltante ou sem viewport: nada (não há como converter)
+  const semFoto = reduzir(r.estado, { ...preClique({ em: 9500 }), captura: { imagemId: null, faltante: true, motivo: 'x' } });
+  assert.deepEqual(semFoto.acoes[0].passo.anotacoes, []);
+  // digitar de novo no mesmo campo substitui a região (sem duplicar); segundo campo sensível soma
+  r = reduzir(r.estado, { tipo: 'DIGITACAO', mensagem: cpfPendente({ confirmadoPor: 'blur', scroll: { x: 0, y: 50 } }), captura: capturaOk('img_m1x4k9zr05ae', 'confirmacao'), em: 10000 });
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF]);
+  assert.equal(r.estado.sensiveis.length, 1);
+  assert.deepEqual(r.estado.sensiveis[0].scroll, { x: 0, y: 50 });
+  const senha = { ...ALVO_NOME, rotulo: 'Senha', campo: 'Senha', tipoInput: 'password', seletor: '#senha', rectCss: { x: 350, y: 400, w: 400, h: 28 } };
+  r = reduzir(r.estado, { tipo: 'DIGITACAO', mensagem: digitacaoPendente({ alvo: senha, valor: null, sensivel: true, motivo: 'input[type=password]', confirmadoPor: 'blur', scroll: { x: 0, y: 50 } }), captura: capturaOk('img_m1x4k9zr05ae', 'confirmacao'), em: 11000 });
+  assert.equal(r.estado.sensiveis.length, 2);
+  assert.deepEqual(desfoques(r.acoes[0].passo), [{ ...DESFOQUE_CPF, y: 800 }, DESFOQUE_CPF]);   // o próprio (senha) + o CPF
+  r = reduzir(r.estado, preClique({ em: 12000, scroll: { x: 0, y: 50 } }));
+  assert.deepEqual(desfoques(r.acoes[0].passo), [DESFOQUE_CPF, { ...DESFOQUE_CPF, y: 800 }]);
+  // estado gravado por versão anterior (sem `sensiveis`) continua aceito e serializável
+  const antigo = { contador: 0, urlAtual: null, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: null };
+  const v = reduzir(antigo, preClique({ em: 1 }));
+  assert.deepEqual(v.estado.sensiveis, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.estado)), r.estado);
+  const guia = aplicar(criarGuia({ origem: { tipo: 'extensao' } }), r.acoes);
+  assert.deepEqual(validarGuia(guia), { ok: true, erros: [] });
+});
+
 test('Enter com digitação pendente: digitar (captura própria) + tecla (compartilhada), ambos gatilho', () => {
   const entrada = { tipo: 'TECLA', mensagem: comum({ tecla: 'Enter', modificadores: [], alvo: ALVO_NOME, digitacaoPendente: digitacaoPendente() }), captura: capturaOk('img_m1x4k9zr05ae', 'confirmacao'), em: 3000 };
   const { estado, acoes } = reduzir(criarEstadoRedutor(), entrada);
@@ -142,21 +220,47 @@ test('duplo clique < 400 ms mescla no passo anterior; > 400 ms cria outro', () =
   assert.equal(s.acoes[0].tipo, 'criar');
 });
 
-test('clique + navegação em < 2 s preenche resultado.url; SPA também', () => {
+test('clique + navegação em < 2 s preenche resultado.url e consome o gatilho; SPA também', () => {
   let r = reduzir(criarEstadoRedutor('https://app.exemplo.com/form'), preClique({ em: 1000 }));
   const clique = r.acoes[0].passo;
   r = reduzir(r.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/ok', transicao: 'link', em: 2500 });
   assert.deepEqual(r.acoes, [{ tipo: 'atualizar', passoId: clique.id, campos: { resultado: { url: 'https://app.exemplo.com/ok' } } }]);
   assert.equal(r.estado.urlAtual, 'https://app.exemplo.com/ok');
-  // form_submit fora da janela ainda é atribuído ao gatilho
+  assert.equal(r.estado.ultimoGatilho, null);
+  // gatilho consumido: a navegação seguinte (mesmo form_submit) não sobrescreve resultado.url — ganha passo navegar
   r = reduzir(r.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/ok2', transicao: 'form_submit', em: 9000 });
-  assert.equal(r.acoes[0].tipo, 'atualizar');
+  assert.deepEqual(r.acoes, [{ tipo: 'capturarNavegacao', url: 'https://app.exemplo.com/ok2', transicao: 'form_submit' }]);
   // SPA com gatilho recente
   let s = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
   s = reduzir(s.estado, { tipo: 'SPA', url: 'https://app.exemplo.com/#/lista', em: 1800 });
   assert.equal(s.acoes[0].tipo, 'atualizar');
   assert.deepEqual(s.acoes[0].campos, { resultado: { url: 'https://app.exemplo.com/#/lista' } });
   assert.equal(s.estado.urlAtual, 'https://app.exemplo.com/#/lista');
+});
+
+test('link/form_submit são atribuídos ao gatilho até 30 s; depois disso (ou já consumido) viram capturarNavegacao', () => {
+  // POST lento: form_submit 10 s depois do clique ainda é o resultado dele
+  let r = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
+  const clique = r.acoes[0].passo;
+  r = reduzir(r.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/ok', transicao: 'form_submit', em: 11000 });
+  assert.deepEqual(r.acoes, [{ tipo: 'atualizar', passoId: clique.id, campos: { resultado: { url: 'https://app.exemplo.com/ok' } } }]);
+  assert.equal(r.estado.ultimoGatilho, null);
+  // transição `link` só é atribuída dentro da janela: 31 s depois é navegação própria
+  let s = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
+  s = reduzir(s.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/c', transicao: 'link', em: 32000 });
+  assert.equal(s.acoes[0].tipo, 'capturarNavegacao');
+  assert.deepEqual(s.estado.ultimoGatilho, { passoId: s.estado.ultimoClique.passoId, em: 1000 });
+  // transição comum fora dos 2 s não é atribuída mesmo com gatilho vivo
+  let t = reduzir(criarEstadoRedutor(), preClique({ em: 1000 }));
+  t = reduzir(t.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/c', transicao: 'reload', em: 5000 });
+  assert.equal(t.acoes[0].tipo, 'capturarNavegacao');
+  // cenário do redirecionamento por script minutos depois (inclusive após pausa): «Clique em «Criar»» fica com a página B; C ganha passo navegar
+  let u = reduzir(criarEstadoRedutor('https://app.exemplo.com/form'), preClique({ em: 1000 }));
+  u = reduzir(u.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/b', transicao: 'form_submit', em: 2200 });
+  assert.equal(u.acoes[0].tipo, 'atualizar');
+  u = reduzir(u.estado, { tipo: 'NAVEGACAO', url: 'https://app.exemplo.com/c', transicao: 'link', em: 2200 + 5 * 60 * 1000 });
+  assert.deepEqual(u.acoes, [{ tipo: 'capturarNavegacao', url: 'https://app.exemplo.com/c', transicao: 'link' }]);
+  assert.equal(u.estado.urlAtual, 'https://app.exemplo.com/c');
 });
 
 test('navegação digitada sem gatilho → capturarNavegacao → NAVEGACAO_CAPTURADA cria passo navegar', () => {

@@ -2,17 +2,24 @@
 // → ações sobre o guia. O SW aplica as ações na ordem; o Mac segue as mesmas regras em Swift.
 import { criarPasso } from './modelo.js';
 import { gerarTitulo } from './frases.js';
+import { gerarId } from './ids.js';
 import { cssParaImagem, pontoParaImagem } from './coordenadas.js';
 import { anotacoesAutomaticas } from './anotacoes.js';
 
-const JANELA_DUPLO_CLIQUE = 400;   // ms entre dois cliques no mesmo alvo
-const JANELA_GATILHO = 2000;       // ms entre clique/Enter e a navegação que ele disparou
+const JANELA_DUPLO_CLIQUE = 400;          // ms entre dois cliques no mesmo alvo
+const JANELA_GATILHO = 2000;              // ms entre clique/Enter e a navegação que ele disparou
+const JANELA_GATILHO_TRANSICAO = 30000;   // ms para link/form_submit (POST lento, redirecionamento no servidor)
 const PAPEIS_MARCAR = new Set(['checkbox', 'radio', 'switch']);
 const TRANSICOES_GATILHO = new Set(['link', 'form_submit']);
 
-/** @returns {{contador:number, urlAtual:string|null, ultimoClique:object|null, ultimoGatilho:object|null, ultimaEntrada:object|null}} */
+/**
+ * `sensiveis`: regiões (CSS px do viewport + scroll do frame) dos campos sensíveis já digitados, por url da página;
+ * todo passo seguinte fotografado na mesma url recebe um `desfoque` auto sobre cada uma (o valor continua no campo).
+ * @typedef {{url:string, frameId:number, seletor:string|null, rectCss:{x:number,y:number,w:number,h:number}, scroll:{x:number,y:number}}} RegiaoSensivel
+ * @returns {{contador:number, urlAtual:string|null, ultimoClique:object|null, ultimoGatilho:object|null, ultimaEntrada:object|null, sensiveis:RegiaoSensivel[]}}
+ */
 export function criarEstadoRedutor(urlInicial = null) {
-  return { contador: 0, urlAtual: urlInicial, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: null };
+  return { contador: 0, urlAtual: urlInicial, ultimoClique: null, ultimoGatilho: null, ultimaEntrada: null, sensiveis: [] };
 }
 
 function mapearTransicao(t) {
@@ -68,27 +75,92 @@ function montarAlvo(descritor, mensagem, captura, pontoCss) {
   };
 }
 
+const mesmoSeletor = (a, b) => (a ?? null) === (b ?? null);
+const rectValido = (r) => r && typeof r === 'object' && r.w > 0 && r.h > 0;
+const rectIgual = (a, b) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+// ---------------------------------------------------------------------------
+// Campos sensíveis: o valor fica visível no campo depois da digitação, então a pixelização
+// precisa acompanhar todas as fotos seguintes da mesma página (inclusive a compartilhada com o clique).
+// ---------------------------------------------------------------------------
+/** @returns {RegiaoSensivel|null} região do campo do passo (null sem url ou sem rectCss) */
+function regiaoDoPasso(passo) {
+  const rectCss = passo.alvo?.rectCss;
+  const url = passo.contexto?.url ?? null;
+  if (!url || !rectValido(rectCss)) return null;
+  return {
+    url,
+    frameId: passo.contexto?.frameId ?? 0,
+    seletor: passo.alvo?.seletor ?? null,
+    rectCss: { x: rectCss.x, y: rectCss.y, w: rectCss.w, h: rectCss.h },
+    scroll: { x: passo.contexto?.scroll?.x ?? 0, y: passo.contexto?.scroll?.y ?? 0 },
+  };
+}
+
+/** Mesmo campo: mesma página e frame, mesmo seletor (ou mesmo rect quando não há seletor). */
+function mesmaRegiao(a, b) {
+  if (a.url !== b.url || a.frameId !== b.frameId) return false;
+  return a.seletor !== null && b.seletor !== null ? a.seletor === b.seletor : rectIgual(a.rectCss, b.rectCss);
+}
+
+/** Registra (ou substitui) a região do campo sensível do passo `digitar`. */
+function registrarSensivel(estado, passo) {
+  const r = regiaoDoPasso(passo);
+  if (!r) return;
+  estado.sensiveis = [...estado.sensiveis.filter((x) => !mesmaRegiao(x, r)), r];
+}
+
+/** Desfoques auto das regiões sensíveis da mesma url, convertidos para px desta captura. @returns {object[]} */
+function desfoquesSensiveis(estado, passo) {
+  const captura = passo.captura;
+  const url = passo.contexto?.url ?? null;
+  if (!url || !estado.sensiveis.length) return [];
+  if (!captura || captura.faltante || !(captura.largura > 0) || !(captura.altura > 0) || !(captura.viewport?.largura > 0)) return [];
+  const imagem = { largura: captura.largura, altura: captura.altura };
+  const e = captura.escala > 0 ? captura.escala : 1;
+  const frameId = passo.contexto?.frameId ?? 0;
+  const scroll = { x: passo.contexto?.scroll?.x ?? 0, y: passo.contexto?.scroll?.y ?? 0 };
+  // o próprio campo sensível já recebe o desfoque de anotacoesAutomaticas (quando tem bbox)
+  const propria = passo.evento?.sensivel === true && rectValido(passo.alvo?.bbox) ? regiaoDoPasso(passo) : null;
+  const lista = [];
+  for (const r of estado.sensiveis) {
+    if (r.url !== url) continue;
+    if (propria && mesmaRegiao(r, propria)) continue;
+    // rectCss já vem somado ao topo; o scroll é do frame que enviou, então só é comparável dentro do mesmo frame
+    const dx = r.frameId === frameId ? r.scroll.x - scroll.x : 0;
+    const dy = r.frameId === frameId ? r.scroll.y - scroll.y : 0;
+    const bbox = cssParaImagem({ x: r.rectCss.x + dx, y: r.rectCss.y + dy, w: r.rectCss.w, h: r.rectCss.h }, captura.viewport, imagem);
+    if (!(bbox.w > 0 && bbox.h > 0)) continue; // rolou para fora da foto
+    lista.push({ id: gerarId('a'), tipo: 'desfoque', auto: true, x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h, bloco: 8 * e });
+  }
+  return lista;
+}
+
 /** Cria o passo completo (título, anotações) e incrementa o contador. */
 function novoPasso(estado, o, opcoes) {
   estado.contador += 1;
   const passo = criarPasso({ ...o, tituloAuto: true });
   passo.titulo = gerarTitulo(passo, opcoes);
-  passo.anotacoes = anotacoesAutomaticas(passo, { numero: estado.contador });
+  const autos = anotacoesAutomaticas(passo, { numero: estado.contador });
+  const sensiveis = desfoquesSensiveis(estado, passo);
+  // desfoques antes do retângulo/marcador, como em anotacoesAutomaticas
+  const i = autos.findIndex((a) => a.tipo === 'retangulo');
+  passo.anotacoes = i < 0 ? [...autos, ...sensiveis] : [...autos.slice(0, i), ...sensiveis, ...autos.slice(i)];
   return passo;
 }
 
 function passoDigitar(estado, payload, captura, confirmadoPor, opcoes) {
   const cap = montarCaptura(captura, payload, captura?.fonte === 'compartilhada' ? 'compartilhada' : 'confirmacao');
-  return novoPasso(estado, {
+  const passo = novoPasso(estado, {
     tipo: 'digitar',
     contexto: montarContexto(payload),
     evento: { valor: payload.sensivel ? null : payload.valor ?? null, sensivel: payload.sensivel === true, motivo: payload.motivo ?? null, confirmadoPor },
     alvo: montarAlvo(payload.alvo, payload, cap, null),
     captura: cap,
   }, opcoes);
+  if (passo.evento.sensivel) registrarSensivel(estado, passo);
+  return passo;
 }
-
-const mesmoSeletor = (a, b) => (a ?? null) === (b ?? null);
 
 /**
  * @param {object} estado @param {{tipo:string, mensagem?:object, captura?:object|null, url?:string, transicao?:string, em:number}} entrada
@@ -97,6 +169,7 @@ const mesmoSeletor = (a, b) => (a ?? null) === (b ?? null);
  */
 export function reduzir(estado, entrada, opcoes = {}) {
   const s = structuredClone(estado ?? criarEstadoRedutor());
+  if (!Array.isArray(s.sensiveis)) s.sensiveis = []; // estado gravado por versão anterior
   const acoes = [];
   const em = entrada.em ?? Date.now();
   const mensagem = entrada.mensagem ?? {};
@@ -204,9 +277,12 @@ export function reduzir(estado, entrada, opcoes = {}) {
     case 'NAVEGACAO': {
       const url = entrada.url ?? mensagem.url ?? null;
       const transicao = entrada.transicao ?? mensagem.transicao ?? 'outro';
-      const gatilhoRecente = s.ultimoGatilho && em - s.ultimoGatilho.em < JANELA_GATILHO;
-      if (s.ultimoGatilho && (gatilhoRecente || TRANSICOES_GATILHO.has(transicao))) {
+      const idade = s.ultimoGatilho ? em - s.ultimoGatilho.em : Infinity;
+      // link/form_submit ganham uma janela maior (o Chrome também usa `link` para location.href por script),
+      // mas finita; o gatilho é consumido: a próxima navegação, mesmo por link, ganha passo `navegar` próprio.
+      if (idade < JANELA_GATILHO || (idade < JANELA_GATILHO_TRANSICAO && TRANSICOES_GATILHO.has(transicao))) {
         acoes.push({ tipo: 'atualizar', passoId: s.ultimoGatilho.passoId, campos: { resultado: { url } } });
+        s.ultimoGatilho = null;
       } else {
         acoes.push({ tipo: 'capturarNavegacao', url, transicao });
       }

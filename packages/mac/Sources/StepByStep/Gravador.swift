@@ -1,8 +1,10 @@
 // Máquina de estados da gravação: evento → descritor (AX) → captura (display sob o ponto) → passo → persistência.
 // Tudo o que muda estado passa por um único fluxo sequencial (AsyncStream consumido por uma Task), então não há
-// corrida entre cliques, teclas, ticks do temporizador, troca de app e comandos do menu. Mesmas regras do
-// redutor JS: digitação pendente antes do clique (imagem compartilhada), duplo clique atualiza o passo anterior,
-// troca de app sem clique recente vira passo `navegar` com `evento.app`.
+// corrida entre cliques, teclas, ticks do temporizador, troca de app e comandos do menu. O estado (app frontal,
+// guia, pasta, monitor do tap) é do fluxo: a main só envia comandos e recebe `aoMudar`/`aoErro`. Mesmas regras
+// do redutor JS: digitação pendente antes do clique (imagem compartilhada), duplo clique atualiza o passo
+// anterior (só `clicar`, nunca checkbox/radio/switch), troca de app sem clique recente vira passo `navegar`.
+// A PNG é codificada e gravada fora do fluxo (Task.detached): o evento seguinte não espera pelo disco.
 import Foundation
 import AppKit
 import CoreGraphics
@@ -20,6 +22,8 @@ private enum Comando {
   case pausarOuRetomar
   case parar
   case alternar
+  case recuperar(pasta: URL)
+  case monitorPronto(MonitorEventos)
 }
 
 private enum Entrada {
@@ -27,6 +31,7 @@ private enum Entrada {
   case comando(Comando)
   case appAtivado(pid: pid_t, nome: String, bundleId: String?)
   case rotuloOcr(passoId: String, rotulo: String)
+  case imagemGravada(imagemId: String, erro: String?)
   case tique
 }
 
@@ -57,26 +62,32 @@ final class Gravador {
   var aoMudar: (@MainActor (EstadoGravador, Int) -> Void)?
   var aoErro: (@MainActor (String) -> Void)?
 
+  // Estado do fluxo sequencial (só a Task de `processar` lê e escreve).
   private var estado: EstadoGravador = .parado
   private var guia: Guia?
   private var persistencia: Persistencia?
   private var contador: Int = 0
   private let capturador: Capturador = Capturador()
   private let teclado: Teclado = Teclado()
-  private var monitor: MonitorEventos?
-  private var continuacao: AsyncStream<Entrada>.Continuation?
-  private var tarefa: Task<Void, Never>?
-  private var temporizador: DispatchSourceTimer?
-  private var observador: NSObjectProtocol?
-  private let pidProprio: pid_t = ProcessInfo.processInfo.processIdentifier
-
+  private var monitorFluxo: MonitorEventos?
   private var appFrontal: (pid: pid_t, nome: String, bundleId: String?) = (0, "", nil)
-  private var ultimaFoto: (foto: Foto, em: Date)?
-  private var ultimoClique: (passoId: String, em: Date, pid: pid_t)?
+  private var ultimoClique: (passoId: String, em: Date, pid: pid_t, tipo: String)?
   private var ultimoCliqueEm: Date = Date.distantPast
   private var primeiroFlagsEm: Date?
   private var teclasRecebidas: Int = 0
   private var monitoramentoPedido: Bool = false
+  private var escritasPendentes: [String: Task<String?, Never>] = [:]
+  private var capturaAvisada: Bool = false
+  private var escritaAvisada: Bool = false
+
+  // Estado da main (criação do tap, observador do workspace, temporizador).
+  private var monitor: MonitorEventos?
+  private var observador: NSObjectProtocol?
+  private var temporizador: DispatchSourceTimer?
+
+  private var continuacao: AsyncStream<Entrada>.Continuation?
+  private var tarefa: Task<Void, Never>?
+  private let pidProprio: pid_t = ProcessInfo.processInfo.processIdentifier
 
   init() {
     var novaContinuacao: AsyncStream<Entrada>.Continuation? = nil
@@ -104,8 +115,9 @@ final class Gravador {
 
   @MainActor
   func preparar() {
+    // O app frontal entra pelo fluxo (`appAtivado`), nunca por escrita direta: `appFrontal` é estado do fluxo.
     if let frontal = NSWorkspace.shared.frontmostApplication, frontal.processIdentifier != pidProprio {
-      appFrontal = (frontal.processIdentifier, frontal.localizedName ?? "", frontal.bundleIdentifier)
+      _ = continuacao?.yield(.appAtivado(pid: frontal.processIdentifier, nome: frontal.localizedName ?? "", bundleId: frontal.bundleIdentifier))
     }
     observador = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil) { [weak self] notificacao in
@@ -115,7 +127,8 @@ final class Gravador {
     prepararMonitor()
   }
 
-  /// Cria o tap (precisa de Acessibilidade); fica ativo também parado, só para ouvir ⌥⇧R.
+  /// Cria o tap na main (precisa de Acessibilidade) e entrega a referência ao fluxo, que é quem liga/desliga.
+  /// Fica ativo também parado, só para ouvir ⌥⇧R.
   @MainActor
   private func prepararMonitor() {
     if let atual = monitor, atual.criado { return }
@@ -126,6 +139,7 @@ final class Gravador {
     do {
       try novo.iniciar()
       monitor = novo
+      _ = continuacao?.yield(.comando(.monitorPronto(novo)))
     } catch {
       monitor = nil
     }
@@ -142,36 +156,29 @@ final class Gravador {
       aoErro?("O monitor de eventos não pôde ser criado. Conceda Acessibilidade ao StepByStep e reabra o app.")
       return
     }
-    var nome: String = appFrontal.nome
-    var pid: pid_t = appFrontal.pid
-    var bundleId: String? = appFrontal.bundleId
+    // Só o app frontal de agora; sem ele (pid 0) o fluxo usa o último que viu.
+    var nome: String = ""
+    var pid: pid_t = 0
+    var bundleId: String? = nil
     if let frontal = NSWorkspace.shared.frontmostApplication, frontal.processIdentifier != pidProprio {
-      nome = frontal.localizedName ?? nome
+      nome = frontal.localizedName ?? ""
       pid = frontal.processIdentifier
       bundleId = frontal.bundleIdentifier
     }
-    continuacao?.yield(.comando(.iniciar(app: nome, pid: pid, bundleId: bundleId)))
+    _ = continuacao?.yield(.comando(.iniciar(app: nome, pid: pid, bundleId: bundleId)))
   }
 
   func pausarOuRetomar() {
-    continuacao?.yield(.comando(.pausarOuRetomar))
+    _ = continuacao?.yield(.comando(.pausarOuRetomar))
   }
 
   func parar() {
-    continuacao?.yield(.comando(.parar))
+    _ = continuacao?.yield(.comando(.parar))
   }
 
-  /// Reconstrói o guide.json do journal, compacta e revela no Finder.
+  /// Reconstrói o guide.json do journal, compacta e revela no Finder — pelo fluxo e só parado (nunca a pasta em curso).
   func recuperar(pasta: URL) {
-    Task { [weak self] in
-      do {
-        _ = try Persistencia.recuperar(pasta: pasta)
-        let zip: URL = try Persistencia.compactar(pasta: pasta)
-        await self?.revelar(zip)
-      } catch {
-        await self?.notificarErro("Não foi possível recuperar a gravação: \(error.localizedDescription)")
-      }
-    }
+    _ = continuacao?.yield(.comando(.recuperar(pasta: pasta)))
   }
 
   @MainActor
@@ -192,6 +199,8 @@ final class Gravador {
       await processarAppAtivado(pid: pid, nome: nome, bundleId: bundleId)
     case .rotuloOcr(let passoId, let rotulo):
       aplicarRotuloOcr(passoId: passoId, rotulo: rotulo)
+    case .imagemGravada(let imagemId, let erro):
+      concluirEscrita(imagemId: imagemId, erro: erro)
     case .tique:
       await processarTique()
     }
@@ -199,6 +208,8 @@ final class Gravador {
 
   private func processarComando(_ comando: Comando) async {
     switch comando {
+    case .monitorPronto(let novo):
+      monitorFluxo = novo
     case .iniciar(let app, let pid, let bundleId):
       guard estado == .parado else { return }
       await iniciarGravacao(app: app, pid: pid, bundleId: bundleId)
@@ -206,7 +217,7 @@ final class Gravador {
       if estado == .gravando {
         await pausar()
       } else if estado == .pausado {
-        retomar()
+        await retomar()
       }
     case .parar:
       guard estado != .parado else { return }
@@ -217,11 +228,13 @@ final class Gravador {
       } else {
         await pararGravacao()
       }
+    case .recuperar(let pasta):
+      await recuperarGravacao(pasta: pasta)
     }
   }
 
   private func processarEvento(_ e: EventoBruto) async {
-    if e.tipo == CGEventType.keyDown, !e.repeticao, Teclado.ehAtalhoAlternar(keycode: e.keycode, flags: e.flags) {
+    if e.tipo == CGEventType.keyDown, !e.repeticao, Teclas.ehAtalhoAlternar(keycode: e.keycode, flags: e.flags) {
       await processarComando(.alternar)
       return
     }
@@ -238,10 +251,36 @@ final class Gravador {
     }
   }
 
+  /// Liga/desliga o tap na main (o MonitorEventos é @MainActor).
+  private func habilitarMonitor(_ ligado: Bool) async {
+    guard let atual = monitorFluxo else { return }
+    await MainActor.run { atual.habilitar(ligado) }
+  }
+
   // MARK: Início, pausa, fim
 
   private func iniciarGravacao(app: String, pid: pid_t, bundleId: String?) async {
-    let nomeApp: String = app.isEmpty ? "app" : app
+    var nomeApp: String = app
+    var pidApp: pid_t = pid
+    var bundleApp: String? = bundleId
+    if pidApp <= 0 {   // sem app frontal no momento do comando: o último visto pelo fluxo
+      nomeApp = appFrontal.nome
+      pidApp = appFrontal.pid
+      bundleApp = appFrontal.bundleId
+    }
+    if nomeApp.isEmpty { nomeApp = "app" }
+
+    // Captura de teste antes de criar a pasta: `CGPreflightScreenCaptureAccess` fica verdadeiro assim que a
+    // permissão é concedida, mas o ScreenCaptureKit só funciona depois de reabrir o app — sem isto a gravação
+    // inteira sairia com capturas faltantes, em silêncio.
+    let displayInicial: CGDirectDisplayID = displaySobPonto(posicaoDoCursor())
+    do {
+      _ = try await capturador.capturar(display: Display(id: displayInicial, limites: CGDisplayBounds(displayInicial)))
+    } catch {
+      await notificarErro("Não foi possível capturar a tela (\(error.localizedDescription)). Conceda Gravação de Tela ao StepByStep em Ajustes do Sistema › Privacidade e Segurança e reabra o app.")
+      return
+    }
+
     do {
       persistencia = try Persistencia(app: nomeApp)
     } catch {
@@ -250,16 +289,17 @@ final class Gravador {
     }
     guia = Guia.novo(app: nomeApp)
     contador = 0
-    ultimaFoto = nil
     ultimoClique = nil
     ultimoCliqueEm = Date.distantPast
+    capturaAvisada = false
+    escritaAvisada = false
     teclado.descartar()
-    if pid > 0 {
-      appFrontal = (pid, nomeApp, bundleId)
-      Acessibilidade.habilitarAcessibilidadeManual(pid: pid)
+    if pidApp > 0 {
+      appFrontal = (pidApp, nomeApp, bundleApp)
+      Acessibilidade.habilitarAcessibilidadeManual(pid: pidApp)
     }
     estado = .gravando
-    monitor?.habilitar(true)
+    await habilitarMonitor(true)
     salvarGuia()
     notificarMudanca()
     // Passo inicial: "Abra o app «…»" com a tela como está 300 ms depois.
@@ -272,14 +312,13 @@ final class Gravador {
       await confirmarDigitacao(confirmadoPor: "tempo", foto: nil)
     }
     estado = .pausado
-    monitor?.habilitar(false)
+    await habilitarMonitor(false)
     notificarMudanca()
   }
 
-  private func retomar() {
+  private func retomar() async {
     estado = .gravando
-    ultimaFoto = nil
-    monitor?.habilitar(true)
+    await habilitarMonitor(true)
     notificarMudanca()
   }
 
@@ -289,17 +328,18 @@ final class Gravador {
     }
     teclado.descartar()
     estado = .parado
-    monitor?.habilitar(true)   // continua ouvindo só o atalho ⌥⇧R
+    contador = 0
+    notificarMudanca()
+    await habilitarMonitor(true)   // continua ouvindo só o atalho ⌥⇧R
+    // PNGs em segundo plano: o zip precisa delas (e das capturas marcadas faltantes quando falharam).
+    await aguardarEscritas()
     guia?.estado = "concluido"
     guia?.atualizadoEm = agoraComMilissegundos()
     salvarGuia()
     let armazenamento: Persistencia? = persistencia
     persistencia = nil
     guia = nil
-    contador = 0
-    ultimaFoto = nil
     ultimoClique = nil
-    notificarMudanca()
     guard let arquivos = armazenamento else { return }
     arquivos.fechar()
     do {
@@ -307,6 +347,22 @@ final class Gravador {
       await revelar(zip)
     } catch {
       await notificarErro(error.localizedDescription)
+    }
+  }
+
+  /// Só parado: durante a gravação a pasta ativa também está "gravando" no guide.json, e recuperá-la marcaria o
+  /// guia como concluído e ziparia a pasta pela metade, concorrendo com os passos.
+  private func recuperarGravacao(pasta: URL) async {
+    guard estado == .parado, persistencia == nil else {
+      await notificarErro(ErroGravacao.gravacaoEmCurso.localizedDescription)
+      return
+    }
+    do {
+      _ = try Persistencia.recuperar(pasta: pasta)
+      let zip: URL = try Persistencia.compactar(pasta: pasta)
+      await revelar(zip)
+    } catch {
+      await notificarErro("Não foi possível recuperar a gravação: \(error.localizedDescription)")
     }
   }
 
@@ -318,7 +374,28 @@ final class Gravador {
     if let d = descritor, d.pid == pidProprio { return }
     let janela: JanelaInfo? = Capturador.janelaSob(p, ignorandoPid: pidProprio)
     let em: Date = e.em
-    let foto: Foto = await obterFoto(displayId: displaySobPonto(p), em: em, fonte: "pointerdown")
+    let pidAlvo: pid_t = descritor?.pid ?? janela?.pid ?? appFrontal.pid
+    let ehMarcar: Bool = descritor.map { $0.papel == "checkbox" || $0.papel == "radio" || $0.papel == "switch" } ?? false
+
+    // Duplo clique: atualiza `evento.vezes` do passo anterior em vez de criar outro — só quando o anterior é um
+    // `clicar` e o alvo não é checkbox/radio/switch (o segundo clique desmarca: é outro passo `marcar`), como o
+    // redutor JS. Decidido antes da foto, para o segundo mouseDown não deixar uma PNG órfã.
+    if e.cliques >= 2, !ehMarcar, let anterior = ultimoClique, anterior.tipo == "clicar", anterior.pid == pidAlvo,
+       em.timeIntervalSince(anterior.em) < 1.0 {
+      let atualizado: Bool = guia?.atualizar(passoId: anterior.passoId) { passo in
+        if case .clicar(let botao, _, let modificadores) = passo.evento {
+          passo.evento = .clicar(botao: botao, vezes: 2, modificadores: modificadores)
+        }
+      } ?? false
+      if atualizado { salvarGuia() }
+      ultimoClique = (anterior.passoId, em, anterior.pid, anterior.tipo)
+      ultimoCliqueEm = em
+      return
+    }
+
+    // Cada clique tem a própria foto (estado pré-clique dele): dois cliques em elementos distintos, mesmo a poucos
+    // ms um do outro, não compartilham imagem — o item de menu precisa da foto com o menu aberto.
+    let foto: Foto = await obterFoto(displayId: displaySobPonto(p), fonte: "pointerdown")
 
     // Digitação pendente em outro elemento: passo `digitar` antes do clique, com a mesma imagem.
     if let pendente = teclado.pendente {
@@ -326,21 +403,6 @@ final class Gravador {
       if !cliqueNoMesmoCampo {
         await confirmarDigitacao(confirmadoPor: "clique", foto: foto.com(fonte: "compartilhada"))
       }
-    }
-
-    let pidAlvo: pid_t = descritor?.pid ?? janela?.pid ?? appFrontal.pid
-
-    // Duplo clique: atualiza `evento.vezes` do passo anterior em vez de criar outro.
-    if e.cliques >= 2, let anterior = ultimoClique, anterior.pid == pidAlvo, em.timeIntervalSince(anterior.em) < 1.0 {
-      let atualizado: Bool = guia?.atualizar(passoId: anterior.passoId) { passo in
-        if case .clicar(let botao, _, let modificadores) = passo.evento {
-          passo.evento = .clicar(botao: botao, vezes: 2, modificadores: modificadores)
-        }
-      } ?? false
-      if atualizado { salvarGuia() }
-      ultimoClique = (anterior.passoId, em, anterior.pid)
-      ultimoCliqueEm = em
-      return
     }
 
     let botao: String
@@ -351,27 +413,28 @@ final class Gravador {
     }
     let alvo: Alvo = montarAlvo(descritor: descritor, janela: janela, foto: foto, ponto: p)
     var passo: Passo
-    if let d = descritor, d.papel == "checkbox" || d.papel == "radio" || d.papel == "switch" {
+    if let d = descritor, ehMarcar {
       passo = Passo.novo(tipo: "marcar")
       let marcadoAntes: Bool = d.marcado ?? false
       passo.evento = .marcar(marcado: d.papel == "radio" ? true : !marcadoAntes)
     } else {
       passo = Passo.novo(tipo: "clicar")
-      passo.evento = .clicar(botao: botao, vezes: 1, modificadores: Teclado.modificadores(e.flags))
+      passo.evento = .clicar(botao: botao, vezes: 1, modificadores: Teclas.modificadores(e.flags))
     }
     passo.contexto = contexto(pid: pidAlvo, janela: descritor?.janela ?? janela?.titulo, foto: foto)
     passo.alvo = alvo
     passo.captura = foto.captura
     passo.anotacoes = anotacoesAutomaticas(alvo: alvo)
     gravar(passo)
-    ultimoClique = (passo.id, em, pidAlvo)
+    ultimoClique = (passo.id, em, pidAlvo, passo.tipo)
     ultimoCliqueEm = em
     agendarOcr(passo: passo, foto: foto)
 
-    // Campo seguro: o "secure input" do macOS não entrega keyDown ao tap; a digitação é registrada já no clique
-    // e confirmada por tempo/foco/clique como passo `digitar` sensível (valor nil), igual ao fixture guia-mac.
+    // Campo seguro: o "secure input" do macOS não entrega keyDown ao tap; a digitação é registrada já no clique e
+    // confirmada por foco/clique/tempo como passo `digitar` sensível (valor nil) — mas só se o número de caracteres
+    // do campo (bullets) tiver mudado até lá; clique na senha seguido de «Cancelar» não vira passo.
     if let d = descritor, d.seguro, teclado.pendente == nil {
-      teclado.acumular(elemento: d.elemento, pid: d.pid, descritor: d, em: em)
+      teclado.acumular(elemento: d.elemento, pid: d.pid, descritor: d, em: em, caracteres: Acessibilidade.numeroDeCaracteres(d.elemento))
     }
   }
 
@@ -380,40 +443,46 @@ final class Gravador {
   private func tratarTecla(_ e: EventoBruto) async {
     if e.repeticao { return }
     teclasRecebidas += 1
-    let nome: String = Teclado.nomeTecla(keycode: e.keycode, caracteres: e.caracteres)
+    let ehFuncaoOuEnter: Bool = Teclas.ehTeclaFuncao(e.keycode) || Teclas.keycodesEnter.contains(e.keycode)
 
-    if Teclado.temModificadorDeAtalho(e.flags) {
-      if Teclado.ehAtalhoDeEdicao(nome: nome, flags: e.flags) {
+    // ⌘/⌃ com qualquer tecla, ou ⌥ com F-key/Enter: atalho. ⌥ sozinho é entrada de caracteres (⌥C → ç,
+    // ⌥E + vogal → acento) e segue como digitação abaixo.
+    if Teclas.ehAtalho(keycode: e.keycode, flags: e.flags) {
+      // O nome vem do caractere SEM ⌃/⌥: com ⌃ o evento entrega U+0001…U+001A e com ⌥ o caractere do layout (ß, ®).
+      let nome: String = Teclas.nomeTecla(keycode: e.keycode, caracteres: e.caracteres, semModificadores: e.caracteresSemModificadores)
+      if Teclas.ehAtalhoDeEdicao(nome: nome, flags: e.flags) {
         // ⌘V, ⌘A, ⌘Z…: mudam o campo em digitação (o valor sai do AX na confirmação), sem passo.
         if let pendente = teclado.pendente {
           teclado.acumular(elemento: pendente.elemento, pid: pendente.pid, descritor: pendente.descritor, em: e.em)
         }
         return
       }
-      guard Teclado.ehImprimivel(e.caracteres) || Teclado.ehTeclaFuncao(e.keycode) || nome == "Enter" else { return }
+      let escreve: Bool = Teclas.caractereDaTecla(keycode: e.keycode, caracteres: e.caracteres,
+                                                  semModificadores: e.caracteresSemModificadores) != nil
+      guard escreve || ehFuncaoOuEnter else { return }
       await passoTecla(nome: nome, flags: e.flags, em: e.em)
       return
     }
-    if Teclado.keycodesEnter.contains(e.keycode) {
+    if Teclas.keycodesEnter.contains(e.keycode) {
       await passoTecla(nome: "Enter", flags: [], em: e.em)
       return
     }
-    if e.keycode == Teclado.keycodeTab {
+    if e.keycode == Teclas.keycodeTab {
       await confirmarDigitacao(confirmadoPor: "blur", foto: nil)
       return
     }
-    if e.keycode == Teclado.keycodeEscape { return }
-    if Teclado.ehTeclaFuncao(e.keycode) {
-      await passoTecla(nome: nome, flags: [], em: e.em)
+    if e.keycode == Teclas.keycodeEscape { return }
+    if Teclas.ehTeclaFuncao(e.keycode) {
+      await passoTecla(nome: Teclas.nomeTecla(keycode: e.keycode, caracteres: e.caracteres), flags: [], em: e.em)
       return
     }
-    if e.keycode == 51 {   // Backspace só edita uma digitação já em curso
+    if e.keycode == Teclas.keycodeBackspace {   // Backspace só edita uma digitação já em curso
       if let pendente = teclado.pendente {
         teclado.acumular(elemento: pendente.elemento, pid: pendente.pid, descritor: pendente.descritor, em: e.em)
       }
       return
     }
-    guard Teclado.ehImprimivel(e.caracteres) else { return }
+    guard Teclas.ehImprimivel(e.caracteres) else { return }
     await acumularDigitacao(em: e.em)
   }
 
@@ -430,7 +499,13 @@ final class Gravador {
     if let el = focado {
       descritor = Acessibilidade.descrever(elemento: el)
     }
-    if let d = descritor, d.pid == pidProprio { return }
+    if let d = descritor {
+      if d.pid == pidProprio { return }
+      // Só campos de texto acumulam (textbox/combobox — input/textarea/contenteditable na extensão): teclas numa
+      // lista, tabela ou botão (type-ahead do Finder, Espaço num botão) não viram passo.
+      guard d.papel == "textbox" || d.papel == "combobox" else { return }
+    }
+    // Foco indeterminável (sem elemento): a digitação segue com elemento nil → passo sensível, como manda 6.2.
     teclado.acumular(elemento: focado, pid: descritor?.pid ?? appFrontal.pid, descritor: descritor, em: em)
   }
 
@@ -438,7 +513,7 @@ final class Gravador {
   private func passoTecla(nome: String, flags: CGEventFlags, em: Date) async {
     var fotoCompartilhada: Foto? = nil
     if teclado.pendente != nil {
-      let fotoDigitacao: Foto = await obterFoto(displayId: displayDoFoco(), em: em, fonte: "confirmacao")
+      let fotoDigitacao: Foto = await obterFoto(displayId: displayDoFoco(), fonte: "confirmacao")
       await confirmarDigitacao(confirmadoPor: "enter", foto: fotoDigitacao)
       fotoCompartilhada = fotoDigitacao.com(fonte: "compartilhada")
     }
@@ -446,24 +521,28 @@ final class Gravador {
     if let compartilhada = fotoCompartilhada {
       foto = compartilhada
     } else {
-      foto = await obterFoto(displayId: displayDoFoco(), em: em, fonte: "pointerdown")
+      foto = await obterFoto(displayId: displayDoFoco(), fonte: "pointerdown")
     }
     var passo: Passo = Passo.novo(tipo: "tecla")
     passo.contexto = contexto(pid: appFrontal.pid, janela: janelaFrontal(), foto: foto)
-    passo.evento = .tecla(tecla: nome, modificadores: Teclado.modificadores(flags), atalho: Teclado.atalho(tecla: nome, flags: flags))
+    passo.evento = .tecla(tecla: nome, modificadores: Teclas.modificadores(flags), atalho: Teclas.atalho(tecla: nome, flags: flags))
     passo.captura = foto.captura
     gravar(passo)
     ultimoCliqueEm = em
   }
 
   private func confirmarDigitacao(confirmadoPor: String, foto fotoDada: Foto?) async {
-    guard let pendente = teclado.retirar() else { return }
-    let em: Date = Date()
+    guard var pendente = teclado.retirar() else { return }
+    // Campo seguro: sem keyDown no tap, o sinal de digitação é a variação do número de caracteres.
+    if pendente.seguro, let el = pendente.elemento, let atual = Acessibilidade.numeroDeCaracteres(el) {
+      pendente.caracteresAtuais = atual
+    }
+    guard pendente.houveDigitacao else { return }
     let foto: Foto
     if let dada = fotoDada {
       foto = dada
     } else {
-      foto = await obterFoto(displayId: displayDe(pendente.elemento), em: em, fonte: "confirmacao")
+      foto = await obterFoto(displayId: displayDe(pendente.elemento), fonte: "confirmacao")
     }
     // Descritor atualizado e valor lido do AX (cobre autocorreção e colagem).
     var descritor: DescritorAX? = pendente.descritor
@@ -505,13 +584,21 @@ final class Gravador {
   private func processarTique() async {
     guard estado == .gravando, let pendente = teclado.pendente else { return }
     let agora: Date = Date()
-    if agora.timeIntervalSince(pendente.ultimaTeclaEm) >= 1.5 {
+    // Campo seguro: relê o comprimento (bullets); a variação conta como tecla e adia a confirmação por tempo.
+    if pendente.seguro, let el = pendente.elemento, let quantidade = Acessibilidade.numeroDeCaracteres(el) {
+      teclado.atualizarCaracteres(quantidade, em: agora)
+    }
+    guard let atual = teclado.pendente else { return }
+    // Senha ainda sem digitação detectada: não confirma por tempo (o usuário pode estar pensando); a confirmação
+    // vem do próximo clique, do foco, da troca de app ou de Parar — e é descartada se nada foi digitado.
+    let aguardandoSenha: Bool = atual.seguro && atual.caracteresIniciais != nil && !atual.houveDigitacao
+    if !aguardandoSenha, agora.timeIntervalSince(atual.ultimaTeclaEm) >= 1.5 {
       await confirmarDigitacao(confirmadoPor: "tempo", foto: nil)
       return
     }
-    guard pendente.elemento != nil else { return }
+    guard atual.elemento != nil else { return }
     let focado: AXUIElement? = Acessibilidade.elementoFocado(pid: appFrontal.pid)
-    if focado != nil, !Acessibilidade.mesmoElemento(pendente.elemento, focado) {
+    if focado != nil, !Acessibilidade.mesmoElemento(atual.elemento, focado) {
       await confirmarDigitacao(confirmadoPor: "blur", foto: nil)
     }
   }
@@ -536,7 +623,7 @@ final class Gravador {
 
   private func criarPassoNavegar(app: String, pid: pid_t, bundleId: String?) async {
     let ponto: CGPoint = posicaoDoCursor()
-    let foto: Foto = await obterFoto(displayId: displaySobPonto(ponto), em: Date(), fonte: "navegacao")
+    let foto: Foto = await obterFoto(displayId: displaySobPonto(ponto), fonte: "navegacao")
     var passo: Passo = Passo.novo(tipo: "navegar")
     passo.contexto = contexto(pid: pid, janela: janelaFrontal(), foto: foto)
     passo.evento = .navegarApp(app: passo.contexto?.app ?? app)
@@ -561,15 +648,11 @@ final class Gravador {
 
   // MARK: Captura e conversões
 
-  private func obterFoto(displayId: CGDirectDisplayID, em: Date, fonte: String) async -> Foto {
+  /// Fotografa o display agora. A PNG é gravada em segundo plano (`agendarEscrita`); o `imagemId` já vai no passo.
+  private func obterFoto(displayId: CGDirectDisplayID, fonte: String) async -> Foto {
     let limites: CGRect = CGDisplayBounds(displayId)
     let display = Display(id: displayId, limites: limites)
     let viewport = Tamanho(largura: Double(limites.size.width), altura: Double(limites.size.height))
-    // Imagem de < 500 ms atrás é o estado pré-clique que se quer: reaproveita em vez de fotografar de novo.
-    if let ultima = ultimaFoto, ultima.foto.display.id == displayId, ultima.foto.captura.faltante == false,
-       em.timeIntervalSince(ultima.em) < 0.5 {
-      return ultima.foto.com(fonte: "compartilhada")
-    }
     let dpr: Double = Capturador.escalaFisica(display)
     guard let arquivos = persistencia else {
       var semPasta: Captura = Captura.faltante(motivo: "sem pasta de gravação", viewport: viewport, dpr: dpr)
@@ -579,16 +662,71 @@ final class Gravador {
     do {
       let resultado: ImagemCapturada = try await capturador.capturar(display: display)
       let imagemId: String = gerarId("img")
-      try arquivos.gravarImagem(resultado.imagem, id: imagemId)
+      agendarEscrita(resultado.imagem, id: imagemId, arquivos: arquivos)
       let captura = Captura(imagemId: imagemId, largura: resultado.imagem.width, altura: resultado.imagem.height,
                             dpr: dpr, viewport: viewport, escala: resultado.escala, fonte: fonte, faltante: false, motivo: nil)
-      let foto = Foto(captura: captura, display: display, imagem: resultado.imagem)
-      ultimaFoto = (foto, em)
-      return foto
+      return Foto(captura: captura, display: display, imagem: resultado.imagem)
     } catch {
-      var faltante: Captura = Captura.faltante(motivo: error.localizedDescription, viewport: viewport, dpr: dpr)
+      let motivo: String = error.localizedDescription
+      // Avisa uma vez por gravação: sem isto o guia inteiro sairia sem imagem e só se descobriria no editor.
+      if !capturaAvisada {
+        capturaAvisada = true
+        Task { @MainActor in
+          self.aoErro?("Não foi possível capturar a tela (\(motivo)). Os passos seguem sem imagem; conceda Gravação de Tela ao StepByStep e reabra o app.")
+        }
+      }
+      var faltante: Captura = Captura.faltante(motivo: motivo, viewport: viewport, dpr: dpr)
       faltante.fonte = fonte
       return Foto(captura: faltante, display: display, imagem: nil)
+    }
+  }
+
+  /// Codifica e grava a PNG fora do fluxo (centenas de ms em Retina): o evento seguinte não espera pelo disco.
+  /// O resultado volta pelo fluxo (`imagemGravada`); `pararGravacao` espera as pendentes antes de compactar.
+  private func agendarEscrita(_ imagem: CGImage, id: String, arquivos: Persistencia) {
+    let tarefa: Task<String?, Never> = Task.detached(priority: .utility) { [weak self] in
+      var falha: String? = nil
+      do {
+        try arquivos.gravarImagem(imagem, id: id)
+      } catch {
+        falha = error.localizedDescription
+      }
+      _ = self?.continuacao?.yield(.imagemGravada(imagemId: id, erro: falha))
+      return falha
+    }
+    escritasPendentes[id] = tarefa
+  }
+
+  private func aguardarEscritas() async {
+    let pendentes: [String: Task<String?, Never>] = escritasPendentes
+    escritasPendentes = [:]
+    for (imagemId, tarefa) in pendentes {
+      let falha: String? = await tarefa.value
+      concluirEscrita(imagemId: imagemId, erro: falha)
+    }
+  }
+
+  /// PNG que não chegou ao disco: os passos que a referenciam passam a captura faltante (imagemId null), como o
+  /// validador exige, e o guide.json é reescrito.
+  private func concluirEscrita(imagemId: String, erro: String?) {
+    escritasPendentes[imagemId] = nil
+    guard let motivo = erro, var atual = guia else { return }
+    var mudou: Bool = false
+    for indice in atual.passos.indices {
+      guard let captura = atual.passos[indice].captura, captura.imagemId == imagemId, captura.faltante == false else { continue }
+      var faltante: Captura = Captura.faltante(motivo: motivo, viewport: captura.viewport, dpr: captura.dpr)
+      faltante.fonte = captura.fonte
+      atual.passos[indice].captura = faltante
+      mudou = true
+    }
+    guard mudou else { return }
+    atual.atualizadoEm = agoraComMilissegundos()
+    atual.atualizarImagens()
+    guia = atual
+    salvarGuia()
+    if !escritaAvisada {
+      escritaAvisada = true
+      Task { @MainActor in self.aoErro?("Falha ao gravar a imagem \(imagemId).png: \(motivo)") }
     }
   }
 

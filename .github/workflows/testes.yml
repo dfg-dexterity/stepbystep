@@ -40,28 +40,11 @@ jobs:
       - name: Testes sem navegador (node --test)
         run: npm test
 
-      - name: Testes e2e (Playwright headless; fallback xvfb-run)
-        env:
-          SBS_E2E: "1"
-        run: |
-          if npm run test:e2e; then
-            echo "e2e verde em headless"
-          else
-            echo "::warning::e2e falhou em headless — repetindo com xvfb-run (headless:false)"
-            sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
-            SBS_XVFB=1 xvfb-run -a --server-args="-screen 0 1280x800x24" npm run test:e2e
-          fi
-
-      - name: Perfis e artefatos do Playwright (em caso de falha)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-artefatos
-          path: |
-            tests/.perfis/**/*.png
-            tests/.perfis/**/*.webm
-            dist/
-          if-no-files-found: ignore
+      # Sem fallback com xvfb-run: os e2e fixam `headless: true` (headless novo, que carrega a extensão),
+      # então repetir a suíte sob um X virtual só dobrava o tempo de uma falha real. Uma segunda execução
+      # em janela (headless:false) exigiria que tests/e2e lesse uma variável — hoje nenhuma é lida.
+      - name: Testes e2e (Playwright, headless novo)
+        run: npm run test:e2e
 
   mac:
     name: App Mac (swift build + swift test)

@@ -357,3 +357,80 @@ test('popup: lista os últimos guias e recusa gravar uma página da extensão', 
   assert.equal(await sw.evaluate(() => globalThis.__sbs.estado()), null);
   await popup.close();
 });
+
+/** Inicia uma gravação numa página nova e visível. @returns {Promise<{page, abaId:number, guiaId:string}>} */
+async function gravarPagina(url) {
+  const page = await ctx.newPage();
+  if (DEBUG) page.on('console', (m) => console.log('[pagina]', m.text()));
+  await page.goto(url);
+  await page.bringToFront();
+  const abaId = await abaPorUrl(url);
+  assert.ok(Number.isInteger(abaId), 'aba encontrada');
+  const inicio = await sw.evaluate((id) => globalThis.__sbs.iniciar(id), abaId);
+  assert.equal(inicio.ok, true, inicio.erro ?? '');
+  await page.locator('[data-sbs-barra]').waitFor({ state: 'attached', timeout: 5000 });
+  return { page, abaId, guiaId: inicio.guiaId };
+}
+
+test('teclado: AltGr, Ctrl+Alt+tecla, tecla segurada, Enter na barra e caractere em campo sensível não viram passos', async () => {
+  const { page, guiaId } = await gravarPagina(base + 'formulario.html?gravacao=teclas');
+  // keydown sintético (isTrusted false chega ao sensor do mesmo jeito): estados que o Playwright não gera
+  const sintetico = (seletor, init) => page.evaluate(([s, i]) => {
+    document.querySelector(s).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...i }));
+  }, [seletor, init]);
+
+  await page.focus('#nome');
+  await page.keyboard.press('Control+b');                                                             // atalho de verdade → passo
+  await page.keyboard.press('Control+Alt+q');                                                         // AltGr no Windows chega como Ctrl+Alt
+  await sintetico('#nome', { key: '/', code: 'KeyQ', ctrlKey: true, altKey: true, modifierAltGraph: true }); // AltGr+Q (ABNT2) = «/»
+  await sintetico('#nome', { key: '?', code: 'KeyW', altKey: true, modifierAltGraph: true });          // AltGraph sem Ctrl
+  await sintetico('#nome', { key: 'Enter', repeat: true });                                           // Enter segurado
+  await sintetico('[data-sbs-barra]', { key: 'Enter' });                                              // Enter com foco num botão da barra
+  await page.press('#nome', 'Enter');                                                                 // Enter de verdade → passo
+  await page.focus('#senha');
+  await page.keyboard.press('Control+b');                                                             // caractere + modificador em campo sensível
+  await page.keyboard.press('Control+Shift+x');
+
+  await esperarGuia(guiaId, (g) => g.passos.length >= 3);
+  await esperar(600); // nada mais pode chegar
+  assert.equal((await sw.evaluate(() => globalThis.__sbs.parar())).ok, true);
+  const guia = await sw.evaluate((id) => globalThis.__sbs.lerGuia(id), guiaId);
+  assert.deepEqual(guia.passos.map((p) => p.titulo), [
+    `Navegue para 127.0.0.1:${servidor.porta}/tests/fixtures/paginas/formulario.html`, // a frase omite a query
+    'Pressione Ctrl+B',
+    'Pressione Enter',
+  ], `títulos: ${JSON.stringify(guia.passos.map((p) => p.titulo))}`);
+  assert.deepEqual(guia.passos[1].evento, { tecla: 'B', modificadores: ['Ctrl'], atalho: 'Ctrl+B' });
+  assert.equal(guia.passos[1].captura.faltante, false);
+  await page.close();
+});
+
+test('aba em segundo plano: digitação confirmada com outra aba visível fica sem foto (a outra aba nunca é fotografada)', async () => {
+  const { page, abaId, guiaId } = await gravarPagina(base + 'formulario.html?gravacao=fundo');
+  await page.fill('#nome', 'Em segundo plano');
+  // outra aba, fora da gravação, vira a visível da mesma janela — como o webmail pessoal do usuário
+  const outra = await sw.evaluate(async ({ url, abaId: id }) => {
+    const { windowId } = await chrome.tabs.get(id);
+    return (await chrome.tabs.create({ url, windowId, active: true })).id;
+  }, { url: base + 'pagina2.html?outra=1', abaId });
+  for (let i = 0; i < 50 && await sw.evaluate(async (id) => (await chrome.tabs.get(id)).active, abaId); i++) await esperar(100);
+  assert.equal(await sw.evaluate(async (id) => (await chrome.tabs.get(id)).active, abaId), false, 'aba gravada em segundo plano');
+  await page.evaluate(() => document.getElementById('nome').blur()); // focusout → DIGITACAO confirmada por blur
+
+  const gravando = await esperarGuia(guiaId, (g) => g.passos.length >= 2);
+  const digitar = gravando.passos[1];
+  assert.equal(digitar?.titulo, 'Digite «Em segundo plano» no campo «Nome»');
+  assert.equal(digitar.captura.faltante, true, 'sem foto: captureVisibleTab fotografaria a outra aba');
+  assert.equal(digitar.captura.motivo, 'aba não visível');
+  assert.equal(digitar.captura.imagemId, null);
+
+  // de volta à aba gravada, a captura funciona de novo
+  await sw.evaluate(async ({ abaId: id, outra: o }) => { await chrome.tabs.update(id, { active: true }); await chrome.tabs.remove(o); }, { abaId, outra });
+  await page.bringToFront();
+  await page.locator('meu-widget').locator('button').click();
+  const depois = await esperarGuia(guiaId, (g) => g.passos.length >= 3);
+  assert.equal(depois.passos[2]?.titulo, 'Clique em «Botão no shadow»');
+  assert.equal(depois.passos[2].captura.faltante, false);
+  assert.equal((await sw.evaluate(() => globalThis.__sbs.parar())).ok, true);
+  await page.close();
+});

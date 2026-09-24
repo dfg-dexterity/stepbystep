@@ -14,6 +14,33 @@ const JANELA_UPLOADS = 30;                    // uploads seguidos antes de criar
 const VALIDADE_UPLOAD_MS = 50 * 60 * 1000;    // retomada só reaproveita uploads com < 50 min
 const MAX_TENTATIVAS_429 = 5;
 const MAX_TENTATIVAS_SERVIDOR = 3;
+const ID_NOTION = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/;
+const PREFIXO_URL_NOTION = 'https://www.notion.so/';
+
+/** @returns {boolean} id de página/bloco no formato do Notion (uuid, com ou sem hífens) — só esses entram na rota da API */
+export const idNotionValido = (id) => typeof id === 'string' && ID_NOTION.test(id);
+/** @returns {boolean} link que pode ser oferecido como "Abrir no Notion" */
+export const urlNotionValida = (url) => typeof url === 'string' && url.startsWith(PREFIXO_URL_NOTION);
+
+/**
+ * Publicação anterior aceitável para retomada. `guia.publicacoes` vem do guide.json (possivelmente importado de
+ * terceiros): só retoma com `paginaId` no formato do Notion, e `url` fora do Notion é trocada pelo link canônico da página.
+ * @param {object} publicacao @returns {object|null} cópia saneada, ou null quando não há o que retomar
+ */
+export function publicacaoRetomavel(publicacao) {
+  const p = publicacao;
+  if (!p || typeof p !== 'object' || p.destino !== 'notion' || p.concluida || !idNotionValido(p.paginaId)) return null;
+  const uploads = p.uploads && typeof p.uploads === 'object' && !Array.isArray(p.uploads) ? { ...p.uploads } : {};
+  return {
+    destino: 'notion',
+    paginaId: p.paginaId,
+    url: urlNotionValida(p.url) ? p.url : PREFIXO_URL_NOTION + p.paginaId.replace(/-/g, ''),
+    em: typeof p.em === 'string' && Number.isFinite(Date.parse(p.em)) ? p.em : null,
+    concluida: false,
+    uploads,
+    lotesEnviados: Number.isInteger(p.lotesEnviados) && p.lotesEnviados > 0 ? p.lotesEnviados : 0,
+  };
+}
 
 export class ErroNotion extends Error {
   constructor(status, corpo, mensagem) {
@@ -150,6 +177,7 @@ export function criarClienteNotion(cfg) {
 
     /** PATCH /v1/blocks/{id}/children */
     async anexarBlocos(paginaId, blocos) {
+      if (!idNotionValido(paginaId)) throw new Error('Id de página do Notion inválido.');
       await requisicao('PATCH', `/v1/blocks/${paginaId}/children`, { json: { children: blocos } });
     },
 
@@ -166,17 +194,16 @@ export function criarClienteNotion(cfg) {
       const limite = o.limiteUpload ?? (atrasDoProxy ? LIMITE_UPLOAD_PROXY : LIMITE_UPLOAD_DIRETO);
       const reduzir = o.reduzirImagem ?? reduzirImagem;
       const agora = Date.now();
-      const anterior = o.publicacaoAnterior;
-      const retomar = !!(anterior && anterior.destino === 'notion' && anterior.paginaId && !anterior.concluida);
-      const uploadsValidos = retomar && Number.isFinite(Date.parse(anterior.em)) && agora - Date.parse(anterior.em) < VALIDADE_UPLOAD_MS;
+      const anterior = publicacaoRetomavel(o.publicacaoAnterior);   // ids/links vindos do arquivo só entram saneados
+      const uploadsValidos = !!anterior && anterior.em !== null && agora - Date.parse(anterior.em) < VALIDADE_UPLOAD_MS;
       const publicacao = {
         destino: 'notion',
-        paginaId: retomar ? anterior.paginaId : null,
-        url: retomar ? anterior.url ?? null : null,
+        paginaId: anterior ? anterior.paginaId : null,
+        url: anterior ? anterior.url : null,
         em: uploadsValidos ? anterior.em : new Date(agora).toISOString(),
         concluida: false,
-        uploads: uploadsValidos ? { ...(anterior.uploads ?? {}) } : {},
-        lotesEnviados: retomar ? anterior.lotesEnviados ?? 0 : 0,
+        uploads: uploadsValidos ? anterior.uploads : {},
+        lotesEnviados: anterior ? anterior.lotesEnviados : 0,
       };
 
       // janelas de passos: corta quando a janela já tem 30 imagens

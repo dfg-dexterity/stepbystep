@@ -1,15 +1,20 @@
 // Diálogo modal sem framework, sobre .dxt-modal do dexterity.css (sombra removida em app.css).
 // Devolve uma Promise resolvida com o `valor` do botão clicado (null ao fechar por Esc/fora).
+// Diálogos podem se empilhar (ex.: Importar → «Guia já existe»): só o do topo trata o teclado.
 
 let abertos = 0;
+const pilha = []; // fundos dos diálogos abertos, do mais antigo ao do topo
 
 /**
  * @param {{titulo?:string, conteudo?:Node|string, botoes?:{rotulo:string, valor?:any, primario?:boolean, perigo?:boolean, fechar?:boolean}[],
- *          fechavel?:boolean, largura?:number, classe?:string, aoAbrir?:(caixa:HTMLElement)=>void}} opcoes
+ *          fechavel?:boolean, largura?:number, classe?:string, aoAbrir?:(caixa:HTMLElement)=>void,
+ *          antesDeFechar?:(valor:any)=>boolean|Promise<boolean>}} opcoes
+ *   antesDeFechar: consultado quando o USUÁRIO fecha (Esc, ×, clique fora, botões do rodapé); devolver false mantém
+ *   o diálogo aberto. `fechar(valor)` programático não passa por ele.
  * @returns {{promessa:Promise<any>, fechar:(valor?:any)=>void, elemento:HTMLElement, caixa:HTMLElement}}
  */
 export function abrirDialogo(opcoes = {}) {
-  const { titulo = '', conteudo = null, fechavel = true, largura = 580, classe = '' } = opcoes;
+  const { titulo = '', conteudo = null, fechavel = true, largura = 580, classe = '', antesDeFechar = null } = opcoes;
   const botoes = opcoes.botoes ?? [{ rotulo: 'Fechar', valor: null }];
   const focoAnterior = document.activeElement;
 
@@ -43,9 +48,22 @@ export function abrirDialogo(opcoes = {}) {
     if (fechado) return;
     fechado = true;
     document.removeEventListener('keydown', aoTeclar, true);
+    const i = pilha.indexOf(fundo);
+    if (i >= 0) pilha.splice(i, 1);
     fundo.remove();
     if (focoAnterior && typeof focoAnterior.focus === 'function' && focoAnterior.isConnected) focoAnterior.focus();
     resolver(valor);
+  };
+  let consultando = false;
+  const fecharPeloUsuario = async (valor = null) => {
+    if (fechado || consultando) return;
+    if (antesDeFechar) {
+      consultando = true;
+      let pode = false;
+      try { pode = await antesDeFechar(valor); } finally { consultando = false; }
+      if (!pode) return;
+    }
+    fechar(valor);
   };
 
   if (botoes.length) {
@@ -56,7 +74,7 @@ export function abrirDialogo(opcoes = {}) {
       btn.type = 'button';
       btn.className = `dxt-btn${b.primario ? '' : ' dxt-btn--ghost'}${b.perigo ? ' dxt-btn--perigo' : ''}`;
       btn.textContent = b.rotulo;
-      btn.addEventListener('click', () => fechar(b.valor));
+      btn.addEventListener('click', () => { fecharPeloUsuario(b.valor); });
       rodape.append(btn);
     }
     caixa.append(rodape);
@@ -68,27 +86,31 @@ export function abrirDialogo(opcoes = {}) {
     x.className = 'dialogo-fechar';
     x.setAttribute('aria-label', 'Fechar');
     x.textContent = '×';
-    x.addEventListener('click', () => fechar(null));
+    x.addEventListener('click', () => { fecharPeloUsuario(null); });
     caixa.append(x);
-    fundo.addEventListener('pointerdown', (e) => { if (e.target === fundo) fechar(null); });
+    fundo.addEventListener('pointerdown', (e) => { if (e.target === fundo) fecharPeloUsuario(null); });
   }
 
-  // foco preso dentro do diálogo; Esc fecha quando permitido
+  // foco preso dentro do diálogo; Esc fecha quando permitido. Só o diálogo do topo da pilha trata o teclado:
+  // os listeners de captura em `document` rodam na ordem de registro e stopPropagation não cala os irmãos.
   const focaveis = () => [...caixa.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
     .filter((el) => !el.disabled && el.offsetParent !== null);
   function aoTeclar(e) {
-    if (e.key === 'Escape' && fechavel) { e.preventDefault(); e.stopPropagation(); fechar(null); return; }
+    if (pilha.at(-1) !== fundo) return;
+    if (e.key === 'Escape' && fechavel) { e.preventDefault(); e.stopPropagation(); fecharPeloUsuario(null); return; }
     if (e.key === 'Tab') {
       const lista = focaveis();
-      if (!lista.length) return;
+      if (!lista.length) { e.preventDefault(); return; }
       const primeiro = lista[0], ultimo = lista[lista.length - 1];
-      if (e.shiftKey && document.activeElement === primeiro) { e.preventDefault(); ultimo.focus(); }
+      if (!caixa.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? ultimo : primeiro).focus(); }
+      else if (e.shiftKey && document.activeElement === primeiro) { e.preventDefault(); ultimo.focus(); }
       else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primeiro.focus(); }
     }
     // atalhos globais do editor não devem agir por trás do diálogo
     e.stopPropagation();
   }
   document.addEventListener('keydown', aoTeclar, true);
+  pilha.push(fundo);
 
   document.body.append(fundo);
   opcoes.aoAbrir?.(caixa);

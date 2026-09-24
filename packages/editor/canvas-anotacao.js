@@ -1,6 +1,8 @@
 // Painel da imagem: <canvas> de visualização (desenharPasso do núcleo) + camada de preview
 // (alças, máscara do recorte) sobreposta, zoom e cache de ImageBitmap por imagemId.
 // Conversão ponteiro → imagem: x = area.x + offsetX / zoom (todas as coordenadas em px da imagem).
+// O cache é compartilhado com as miniaturas e as exportações; a imagem do passo aberto fica fixada
+// (fora do LRU) e o canvas só redesenha quando algo visível muda.
 import { desenharPasso, medidas } from '../core/render-canvas.js';
 import { separarRecorte, areaSaida, bboxDaAnotacao } from '../core/anotacoes.js';
 import { carregarImagem } from '../core/armazenamento.js';
@@ -12,8 +14,12 @@ import { estado, on, emitir, passoAtual, anotacaoSelecionada, temImagem, ZOOM_MI
 // ---------------------------------------------------------------------------
 const cache = new Map(); // imagemId → Promise<ImageBitmap|null>
 const LIMITE_CACHE = 6;
+let fixado = null;       // imagem do passo aberto no canvas: nunca sai do cache (as miniaturas também o usam)
 
 export const criarCanvas = (w, h) => new OffscreenCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
+
+/** Um ImageBitmap fechado (`close()`) fica com width/height 0 e não serve para desenhar nem medir. */
+export const bitmapFechado = (bmp) => !!bmp && !(bmp.width > 0 && bmp.height > 0);
 
 /** @returns {Promise<ImageBitmap|null>} */
 export function obterBitmap(imagemId) {
@@ -29,11 +35,18 @@ export function obterBitmap(imagemId) {
     .catch((e) => { console.error('Falha ao carregar a imagem', imagemId, e); return null; });
   cache.set(imagemId, p);
   while (cache.size > LIMITE_CACHE) {
-    const [id, antigo] = cache.entries().next().value;
+    const id = [...cache.keys()].find((k) => k !== fixado);   // o mais antigo que não está em uso pelo canvas
+    if (id === undefined) break;
+    const antigo = cache.get(id);
     cache.delete(id);
     antigo.then((b) => b?.close?.());
   }
   return p;
+}
+
+/** Mantém a imagem fora da evicção do LRU (null libera). Só o canvas do passo atual fixa. */
+export function fixarBitmap(imagemId) {
+  fixado = imagemId ?? null;
 }
 
 export function esquecerBitmap(imagemId) {
@@ -94,6 +107,7 @@ export function montarCanvas(wrap, opcoes = {}) {
   let temporario = null;      // anotações provisórias durante um gesto
   let agendado = false;
   let bitmapAtual = null;
+  let ultimaAssinatura = null; // o que está desenhado: redesenha só quando algo visível muda (não a cada tecla)
   let areaAtual = { x: 0, y: 0, w: 1, h: 1 };
   let modoAjustar = true;     // zoom "ajustar à largura" até o usuário mexer no zoom
   let destruido = false;
@@ -108,6 +122,8 @@ export function montarCanvas(wrap, opcoes = {}) {
     vazio.hidden = false;
     vazio.replaceChildren();
     bitmapAtual = null;
+    ultimaAssinatura = null;
+    fixarBitmap(null);
     const p = document.createElement('p');
     p.className = 'canvas-vazio-texto';
     if (!passo) p.textContent = 'Selecione um passo na lista para ver a imagem.';
@@ -184,10 +200,15 @@ export function montarCanvas(wrap, opcoes = {}) {
     const passo = passoAtual();
     if (!guia || !passo || !temImagem(passo)) { mostrarVazio(passo); return; }
     const imagemId = passo.captura.imagemId;
-    const bmp = await obterBitmap(imagemId);
+    fixarBitmap(imagemId);   // a partir daqui o LRU não fecha esta imagem, mesmo com as miniaturas carregando outras
+    let bmp = await obterBitmap(imagemId);
+    if (bitmapFechado(bmp)) {
+      // fechado pelo LRU antes de ser fixado (0×0): recarrega do IndexedDB
+      esquecerBitmap(imagemId);
+      bmp = await obterBitmap(imagemId);
+    }
     if (destruido || passoAtual()?.id !== passo.id || passoAtual().captura?.imagemId !== imagemId) return;
     if (!bmp) { mostrarVazio(passo, 'A imagem deste passo não foi encontrada no armazenamento. Anexe outra.'); return; }
-    bitmapAtual = bmp;
     const imagem = { largura: bmp.width, altura: bmp.height, fonte: bmp };
     const anotacoes = temporario ?? passo.anotacoes;
     const { recorte } = separarRecorte(anotacoes);
@@ -202,6 +223,10 @@ export function montarCanvas(wrap, opcoes = {}) {
     const zoom = estado.zoom;
     const W = Math.max(1, Math.round(area.w * zoom));
     const H = Math.max(1, Math.round(area.h * zoom));
+    // tudo o que entra no desenho (imagem, anotações, seleção, recorte visível, zoom, estilo): igual ao último → nada a fazer
+    const assinatura = [imagemId, zoom, W, H, mostrarTudo, selecionada?.id ?? '', passo.captura.escala ?? '', JSON.stringify(anotacoes), JSON.stringify(guia.estilo ?? null)].join('|');
+    if (assinatura === ultimaAssinatura && bmp === bitmapAtual && !palco.hidden) return;
+    bitmapAtual = bmp;
     for (const c of [vis, preview]) {
       if (c.width !== W) c.width = W;
       if (c.height !== H) c.height = H;
@@ -220,11 +245,14 @@ export function montarCanvas(wrap, opcoes = {}) {
     } catch (e) {
       // bitmap fechado pelo LRU entre o carregamento e o desenho: recarrega uma vez
       console.warn('Redesenho após falha no bitmap', e);
+      bitmapAtual = null;
+      ultimaAssinatura = null;
       esquecerBitmap(imagemId);
       agendar();
       return;
     }
     desenharPreview(anotacoes, recorte, selecionada, area, zoom, mostrarTudo, passo);
+    ultimaAssinatura = assinatura;
     palco.dataset.zoom = String(zoom);
     palco.dataset.area = `${area.x},${area.y},${area.w},${area.h}`;
     palco.hidden = false;
@@ -243,6 +271,9 @@ export function montarCanvas(wrap, opcoes = {}) {
   });
   const observador = new ResizeObserver(() => { if (modoAjustar) agendar(); });
   observador.observe(wrap);
+  // fontes que chegaram depois do primeiro desenho (marcadores, textos): o desenho igual ao anterior precisa ser refeito
+  const aoCarregarFontes = () => { ultimaAssinatura = null; agendar(); };
+  document.fonts?.addEventListener?.('loadingdone', aoCarregarFontes);
   agendar();
 
   return {
@@ -255,7 +286,8 @@ export function montarCanvas(wrap, opcoes = {}) {
     definirZoomManual(z) { modoAjustar = false; estado.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)); emitir('mudou', { motivo: 'zoom' }); },
     emAjuste: () => modoAjustar,
     area: () => areaAtual,
-    imagemAtual: () => (bitmapAtual ? { largura: bitmapAtual.width, altura: bitmapAtual.height } : null),
+    /** Dimensões do bitmap desenhado, ou null se não há (ou se o LRU o fechou: um bitmap fechado mede 0×0). */
+    imagemAtual: () => (bitmapAtual && !bitmapFechado(bitmapAtual) ? { largura: bitmapAtual.width, altura: bitmapAtual.height } : null),
     /** Ponteiro → px da imagem. */
     coordenadasDoEvento(e) {
       const r = preview.getBoundingClientRect();
@@ -268,6 +300,13 @@ export function montarCanvas(wrap, opcoes = {}) {
     },
     /** Anotações provisórias (gesto em curso); null volta ao guia. */
     definirTemporario(lista) { temporario = lista; agendar(); },
-    destruir() { destruido = true; cancelar(); observador.disconnect(); wrap.replaceChildren(); },
+    destruir() {
+      destruido = true;
+      cancelar();
+      observador.disconnect();
+      document.fonts?.removeEventListener?.('loadingdone', aoCarregarFontes);
+      fixarBitmap(null);
+      wrap.replaceChildren();
+    },
   };
 }

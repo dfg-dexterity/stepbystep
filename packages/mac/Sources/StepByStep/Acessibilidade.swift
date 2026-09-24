@@ -119,6 +119,14 @@ enum Acessibilidade {
     return nil
   }
 
+  /// `kAXNumberOfCharactersAttribute` (campos seguros contam os bullets); sem o atributo, o tamanho do valor.
+  static func numeroDeCaracteres(_ el: AXUIElement) -> Int? {
+    if let valor = atributo(el, kAXNumberOfCharactersAttribute as CFString), let n = valor as? NSNumber {
+      return n.intValue
+    }
+    return valorTexto(el)?.count
+  }
+
   static func valorBooleano(_ el: AXUIElement) -> Bool? {
     guard let valor = atributo(el, kAXValueAttribute as CFString) else { return nil }
     if let n = valor as? NSNumber { return n.intValue != 0 }

@@ -1,6 +1,21 @@
 // Menu suspenso (popover) ancorado a um botão: navegação por setas, Esc e clique fora fecham.
+// Com o menu aberto o teclado é dele: a tecla anunciada num item (`atalho`) executa o item e as demais
+// não chegam aos atalhos globais do editor (Delete apagaria a anotação selecionada, não o passo).
 
 let menuAberto = null;
+
+const TECLAS = { '↑': 'ArrowUp', '↓': 'ArrowDown', '←': 'ArrowLeft', '→': 'ArrowRight', Del: 'Delete', Esc: 'Escape' };
+
+/** «Alt+↓», «F2», «Delete», «Ctrl+D» casam com o keydown? (⌘/Cmd/Ctrl valem como ctrlKey ou metaKey) */
+export function atalhoCasa(atalho, e) {
+  const partes = String(atalho ?? '').split('+').map((p) => p.trim()).filter(Boolean);
+  if (!partes.length) return false;
+  const tecla = partes.pop();
+  const mods = new Set(partes.map((p) => p.toLowerCase()));
+  const controle = mods.has('ctrl') || mods.has('⌘') || mods.has('cmd');
+  if (mods.has('alt') !== !!e.altKey || mods.has('shift') !== !!e.shiftKey || controle !== !!(e.ctrlKey || e.metaKey)) return false;
+  return (TECLAS[tecla] ?? tecla).toLowerCase() === String(e.key).toLowerCase();
+}
 
 /**
  * @param {HTMLElement} ancora
@@ -53,6 +68,9 @@ export function abrirMenu(ancora, itens, opcoes = {}) {
   const aoClicarFora = (e) => { if (!menu.contains(e.target) && e.target !== ancora && !ancora.contains(e.target)) fechar(); };
   const itensFocaveis = () => [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
   const aoTeclar = (e) => {
+    // a tecla anunciada num item (Delete, F2, Alt+↓…) executa o item — antes das setas, que sem Alt só navegam
+    const item = itens.find((it) => !it.separador && !it.desabilitado && it.atalho && atalhoCasa(it.atalho, e));
+    if (item) { e.preventDefault(); e.stopPropagation(); fechar(); item.acao?.(); return; }
     const lista = itensFocaveis();
     const i = lista.indexOf(document.activeElement);
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fechar(); ancora.focus(); }
@@ -61,6 +79,7 @@ export function abrirMenu(ancora, itens, opcoes = {}) {
     else if (e.key === 'Home') { e.preventDefault(); lista[0]?.focus(); }
     else if (e.key === 'End') { e.preventDefault(); lista[lista.length - 1]?.focus(); }
     else if (e.key === 'Tab') { fechar(); }
+    else if (e.key !== 'Enter' && e.key !== ' ') { e.stopPropagation(); }   // Enter/Espaço ativam o item focado; o resto não sai do menu
   };
 
   document.body.append(menu);

@@ -147,7 +147,32 @@ before(async () => {
   page = await contexto.newPage();
   page.on('pageerror', (e) => errosDePagina.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') errosDePagina.push(`console.error: ${m.text()}`); });
+  // instrumentação: conta os drawImage no canvas de visualização e simula falha de cota ao gravar imagens no IndexedDB
+  await page.addInitScript(() => {
+    window.__sbsTeste = { drawImageVis: 0, falharImagem: null };
+    const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function (...args) {
+      if (this.canvas?.id === 'canvas-vis') window.__sbsTeste.drawImageVis++;
+      return drawImage.apply(this, args);
+    };
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (valor, ...resto) {
+      const alvo = window.__sbsTeste.falharImagem;
+      if (alvo && this.name === 'imagens' && (alvo === '*' || valor?.id === alvo)) throw new DOMException('cota simulada pelo teste', 'QuotaExceededError');
+      return put.call(this, valor, ...resto);
+    };
+  });
 });
+
+/** Escreve no IndexedDB como se fosse outra aba (ou o gravador): `mudar(guia)` altera e grava. */
+const gravarComoOutraAba = (id, mudar) => page.evaluate(async ({ id, codigo }) => {
+  const { carregarGuia, salvarGuia } = await import('/core/armazenamento.js');
+  const g = await carregarGuia(id);
+  (new Function('g', codigo))(g);
+  await salvarGuia(g);
+}, { id, codigo: `(${mudar.toString()})(g)` });
+
+const imagensDoGuia = (id) => page.evaluate(async (id) => (await import('/core/armazenamento.js')).listarImagensDoGuia(id), id);
 
 after(async () => {
   await navegador?.close();
@@ -459,6 +484,90 @@ test('publica no Notion falso: token, busca, uploads multipart, página e regist
   await page.waitForSelector('#notion-token', { state: 'detached' });
 });
 
+test('«Criar nova página» encerra a publicação pendente antiga: ela não reaparece ao reabrir o diálogo', async () => {
+  const PENDENTE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  // publicação incompleta gravada no guia (ex.: falha numa sessão anterior); o editor recarrega para lê-la do banco
+  await gravarComoOutraAba(ID_MAC, (g) => {
+    g.publicacoes.unshift({ destino: 'notion', paginaId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', url: 'https://www.notion.so/aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa', em: new Date().toISOString(), concluida: false, uploads: {}, lotesEnviados: 1 });
+  });
+  await page.reload();
+  await page.waitForSelector('.passo-cartao');
+  await page.click('#btn-notion');
+  await page.waitForSelector('#notion-retomar:visible');
+  assert.equal(await page.$eval('#notion-publicar', (b) => b.hidden), true, 'com pendência, só Retomar / Criar nova página');
+  const antes = notion.registros.length;
+  await page.click('#notion-nova');
+  await page.waitForSelector('#notion-link', { timeout: 60000 });
+  assert.equal(notion.registros.slice(antes).filter((r) => r.rota === '/v1/pages').length, 1, 'uma página nova foi criada');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#notion-token', { state: 'detached' });
+  const guia = await esperarGuia(ID_MAC, (g) => g.publicacoes.length === 2 && g.publicacoes.every((p) => p.concluida), 'pendência antiga encerrada');
+  assert.ok(!guia.publicacoes.some((p) => p.paginaId === PENDENTE), 'a pendência antiga saiu do registro');
+  // ao reabrir: Publicar visível, sem Retomar nem aviso de publicação incompleta
+  await page.click('#btn-notion');
+  await page.waitForSelector('#notion-publicar:visible');
+  assert.equal(await page.$eval('#notion-retomar', (b) => b.hidden), true);
+  assert.doesNotMatch(await page.$eval('#notion-resultado', (e) => e.textContent), /Publicação anterior incompleta/);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#notion-token', { state: 'detached' });
+});
+
+test('publicação em andamento: fechar pede confirmação, cancelar aborta e sair do editor ainda registra a página', async () => {
+  const n0 = (await lerGuia(ID_MAC)).publicacoes.length;
+  const progredindo = () => page.waitForFunction(() => /Enviando imagem/.test(document.querySelector('.notion-progresso-texto')?.textContent ?? ''));
+  // cada requisição ao Notion falso demora 250 ms: dá tempo de interagir no meio da publicação
+  await page.route('**/api/notion/**', async (rota) => {
+    await new Promise((r) => setTimeout(r, 250));
+    try { await rota.continue(); } catch { /* requisição abortada pelo cancelamento */ }
+  });
+  try {
+    // (a) Esc no meio → confirmação; «Continuar publicando» mantém o diálogo e a publicação
+    await page.click('#btn-notion');
+    await page.waitForSelector('#notion-publicar:visible');
+    await page.click('#notion-publicar');
+    await progredindo();
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.dialogo:has-text("Publicação em andamento")');
+    await page.click('.dialogo .dxt-btn:has-text("Continuar publicando")');
+    assert.ok(await page.$('#notion-token'), 'o diálogo do Notion continua aberto');
+    await page.waitForSelector('#notion-link', { timeout: 60000 });
+    await esperarGuia(ID_MAC, (g) => g.publicacoes.length === n0 + 1, 'publicação (a) registrada');
+
+    // (b) publicar de novo e cancelar de verdade: o diálogo fecha, os fetch param e nenhuma página é criada
+    await page.click('#notion-publicar');
+    await progredindo();
+    const antesCancelar = notion.registros.length;
+    await page.keyboard.press('Escape');
+    await page.click('.dialogo .dxt-btn:has-text("Cancelar publicação")');
+    await page.waitForSelector('#notion-token', { state: 'detached' });
+    await page.waitForSelector('.aviso:has-text("cancelada")');
+    await page.waitForTimeout(1500);
+    assert.ok(!notion.registros.slice(antesCancelar).some((r) => r.rota === '/v1/pages'), 'nenhuma página criada depois do cancelamento');
+    assert.equal((await lerGuia(ID_MAC)).publicacoes.length, n0 + 1, 'nada a retomar: sem registro novo');
+
+    // (c) publicar e sair do editor no meio: a página é criada e registrada direto no banco
+    await page.click('#btn-notion');
+    await page.waitForSelector('#notion-publicar:visible');
+    const antesSair = notion.registros.length;
+    await page.click('#notion-publicar');
+    await progredindo();
+    await page.evaluate(() => { location.hash = '#/'; });
+    await page.waitForSelector('.guia-cartao');
+    await page.waitForSelector('#notion-link', { timeout: 60000 });
+    assert.ok(notion.registros.slice(antesSair).some((r) => r.rota === '/v1/pages'), 'a página foi criada mesmo com o editor fechado');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#notion-token', { state: 'detached' });
+    const guia = await esperarGuia(ID_MAC, (g) => g.publicacoes.length === n0 + 2, 'publicação (c) registrada no banco');
+    const ultima = guia.publicacoes.at(-1);
+    assert.equal(ultima.concluida, true);
+    assert.ok(notion.paginas.has(ultima.paginaId), 'o paginaId gravado é o da página criada');
+  } finally {
+    await page.unroute('**/api/notion/**');
+  }
+  await page.goto(url(`/editor/#/guia/${ID_MAC}`));
+  await page.waitForSelector('.passo-cartao');
+});
+
 test('a 390 px o editor vira abas e nada rola na horizontal', async () => {
   await fecharDialogos();
   await page.setViewportSize({ width: 390, height: 800 });
@@ -474,10 +583,40 @@ test('a 390 px o editor vira abas e nada rola na horizontal', async () => {
   // o canvas cabe no seu contêiner com rolagem própria, e o rodapé continua na tela
   const rodape = await page.$eval('.editor-rodape', (e) => e.getBoundingClientRect().bottom);
   assert.ok(rodape <= 800, `rodapé em ${rodape}`);
+  // título longo: reticências (e o valor inteiro na dica), em vez de corte seco
+  await page.fill('#guia-titulo', 'Guia sintético com um título comprido demais para caber em 390 px de largura');
+  await page.evaluate(() => document.activeElement?.blur());
+  const titulo = await page.$eval('#guia-titulo', (e) => ({ overflow: getComputedStyle(e).textOverflow, dica: e.title, cabe: e.scrollWidth > e.clientWidth }));
+  assert.equal(titulo.overflow, 'ellipsis');
+  assert.equal(titulo.dica, 'Guia sintético com um título comprido demais para caber em 390 px de largura');
+  assert.ok(titulo.cabe, 'o título realmente transborda a 390 px');
+  await page.fill('#guia-titulo', 'Gravação — SAP GUI');
+  await esperarGuia(ID_MAC, (g) => g.titulo === 'Gravação — SAP GUI', 'título restaurado');
+  // as abas são um tablist de verdade (tab + aria-selected + tabpanel) e as setas trocam de aba
+  assert.deepEqual(await page.$$eval('.editor-abas [role="tab"]', (els) => els.map((e) => [e.getAttribute('aria-selected'), e.tabIndex, document.getElementById(e.getAttribute('aria-controls'))?.getAttribute('role')])), [['false', -1, 'tabpanel'], ['false', -1, 'tabpanel'], ['true', 0, 'tabpanel']]);
+  await page.focus('.editor-abas [role="tab"][aria-selected="true"]');
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.$eval('.editor-abas [role="tab"][aria-selected="true"]', (e) => e.dataset.aba), 'passos');
   await page.goto(url('/editor/#/'));
   await page.waitForSelector('.guia-cartao');
   assert.ok((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390, 'biblioteca sem rolagem horizontal');
   await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+test('guia em gravação não abre no editor (o gravador ainda insere passos nele)', async () => {
+  await gravarComoOutraAba(ID_MAC, (g) => { g.estado = 'gravando'; });
+  await page.goto(url(`/editor/#/guia/${ID_MAC}`));
+  await page.waitForFunction(() => location.hash === '#/');
+  await page.waitForSelector('.aviso:has-text("sendo gravado")');
+  await page.waitForFunction(() => /Gravação em andamento/.test(document.querySelector('#biblioteca-banner')?.textContent ?? ''));
+  assert.equal(await page.$('#editor'), null, 'o editor não montou');
+  assert.equal(await page.$eval('#biblioteca-banner', (e) => e.querySelectorAll('button').length), 0, 'o banner não oferece «Abrir»');
+  assert.equal(await page.$eval(`.guia-cartao[data-id="${ID_MAC}"] button:has-text("Abrir")`, (b) => b.disabled), true, 'o cartão não abre');
+  await gravarComoOutraAba(ID_MAC, (g) => { g.estado = 'concluido'; });
+  await page.reload();
+  await page.waitForSelector('.guia-cartao');
+  assert.equal(await page.$eval(`.guia-cartao[data-id="${ID_MAC}"] button:has-text("Abrir")`, (b) => b.disabled), false);
+  assert.equal(await page.$eval('#biblioteca-banner', (e) => e.children.length), 0);
 });
 
 test('importa guia-exemplo mantendo títulos e exporta o .stepbystep.zip de volta', async () => {
@@ -550,6 +689,217 @@ test('marcador e texto: número seguinte, fonte proporcional à escala e fundo',
   assert.equal(texto.fundo, 'off');
   assert.equal(await page.$('.canvas-texto-editor'), null, 'o editor de texto fecha ao confirmar');
   assert.equal(await page.$eval('#passo-anotacoes .anotacao-item.is-selecionada .anotacao-detalhe', (e) => e.textContent), '«Razão social»');
+});
+
+test('gesto no canvas depois de o LRU descartar outras imagens: o bitmap do passo fica fixado e a anotação sai certa', async () => {
+  await page.keyboard.press('Escape');            // limpa a seleção do texto
+  await page.keyboard.press('r');
+  await page.waitForSelector('.ferramenta-btn[data-ferramenta="retangulo"].is-ativa');
+  // 10 imagens inexistentes ocupam o cache (limite 6): sem a fixação, o bitmap do passo aberto seria fechado (0×0)
+  const cache = await page.evaluate(async () => {
+    const m = await import('/editor/canvas-anotacao.js');
+    const antes = await m.obterBitmap('img_m1x4k9zr02ab');
+    for (let i = 0; i < 10; i++) await m.obterBitmap(`img_inexistente${i}`);
+    const depois = await m.obterBitmap('img_m1x4k9zr02ab');
+    return { mesmo: antes === depois, fechado: m.bitmapFechado(depois), largura: depois.width };
+  });
+  assert.deepEqual(cache, { mesmo: true, fechado: false, largura: 2880 }, 'a imagem do passo aberto continua no cache, aberta');
+  const total = (await lerGuia(ID_EXEMPLO)).passos[1].anotacoes.length;
+  const g = await arrastarNaImagem({ x: 900, y: 500 }, { x: 1300, y: 700 });
+  const tol = 2 / g.zoom + 1;
+  const guia = await esperarGuia(ID_EXEMPLO, (x) => x.passos[1].anotacoes.length === total + 1, 'retângulo gravado após a evicção');
+  const r = guia.passos[1].anotacoes.at(-1);
+  assert.equal(r.tipo, 'retangulo');
+  assert.ok(Math.abs(r.x - 900) <= tol && Math.abs(r.y - 500) <= tol && Math.abs(r.w - 400) <= tol && Math.abs(r.h - 200) <= tol, JSON.stringify(r));
+});
+
+test('Shift+Enter confirma o texto e quebras de linha coladas viram espaço (o render é de uma linha)', async () => {
+  await page.keyboard.press('t');
+  await page.waitForSelector('.ferramenta-btn[data-ferramenta="texto"].is-ativa');
+  const total = (await lerGuia(ID_EXEMPLO)).passos[1].anotacoes.length;
+  const g = await geometriaDoCanvas();
+  const tela = (p) => ({ x: g.rect.x + (p.x - g.area.x) * g.zoom, y: g.rect.y + (p.y - g.area.y) * g.zoom });
+  const pt = tela({ x: 600, y: 1400 });
+  await page.mouse.click(pt.x, pt.y);
+  await page.waitForSelector('.canvas-texto-editor');
+  await page.keyboard.type('linha um');
+  await page.evaluate(() => { document.querySelector('.canvas-texto-editor').value += '\nlinha dois'; });   // colagem com quebra
+  await page.keyboard.press('Shift+Enter');
+  await page.waitForSelector('.canvas-texto-editor', { state: 'detached' });
+  const guia = await esperarGuia(ID_EXEMPLO, (x) => x.passos[1].anotacoes.length === total + 1, 'texto gravado');
+  const texto = guia.passos[1].anotacoes.at(-1);
+  assert.equal(texto.tipo, 'texto');
+  assert.equal(texto.texto, 'linha um linha dois');
+});
+
+test('digitar na descrição não redesenha o canvas nem recria os cartões da lista', async () => {
+  await page.click('#passo-descricao');
+  await page.evaluate(() => {
+    window.__sbsTeste.drawImageVis = 0;
+    window.__sbsTeste.cartoes = [...document.querySelectorAll('.passo-cartao')];
+  });
+  await page.keyboard.type('Observação digitada letra a letra', { delay: 15 });
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].descricao === 'Observação digitada letra a letra', 'descrição gravada');
+  const r = await page.evaluate(() => {
+    const agora = [...document.querySelectorAll('.passo-cartao')];
+    return { desenhos: window.__sbsTeste.drawImageVis, mesmos: agora.length === window.__sbsTeste.cartoes.length && agora.every((li, i) => li === window.__sbsTeste.cartoes[i]) };
+  });
+  assert.equal(r.desenhos, 0, 'nenhum drawImage no canvas de visualização ao digitar');
+  assert.equal(r.mesmos, true, 'os cartões foram reaproveitados');
+  // e uma mudança visível (título) troca só o cartão do passo
+  await page.fill('#passo-titulo', 'Clique em «Criar» agora');
+  await page.waitForFunction(() => document.querySelector('.passo-cartao[data-id="p_m1x4k9zr02ab"] .titulo')?.textContent === 'Clique em «Criar» agora');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.passo-cartao')].filter((li, i) => li !== window.__sbsTeste.cartoes[i]).map((li) => li.dataset.id).join()), 'p_m1x4k9zr02ab');
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].titulo === 'Clique em «Criar» agora', 'título gravado');
+});
+
+test('com o menu do passo aberto, Delete exclui o passo (com confirmação), não a anotação selecionada', async () => {
+  await page.click('#passo-anotacoes .anotacao-item .anotacao-nome');
+  await page.waitForSelector('#passo-anotacoes .anotacao-item.is-selecionada');
+  const antes = await lerGuia(ID_EXEMPLO);
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"] .menu-btn');
+  await page.waitForSelector('.menu [role="menuitem"]');
+  await page.keyboard.press('Delete');
+  await page.waitForSelector('.dialogo:has-text("Excluir passo")');
+  assert.equal(await page.$('.menu'), null, 'o menu fechou ao executar o item');
+  await page.click('.dialogo .dxt-btn:has-text("Cancelar")');
+  await page.waitForSelector('.dialogo', { state: 'detached' });
+  await page.waitForTimeout(400);
+  const depois = await lerGuia(ID_EXEMPLO);
+  assert.equal(depois.passos.length, antes.passos.length);
+  assert.equal(depois.passos[1].anotacoes.length, antes.passos[1].anotacoes.length, 'a anotação selecionada continua');
+  assert.ok(await page.$('#passo-anotacoes .anotacao-item.is-selecionada'), 'e continua selecionada');
+  // Enter continua ativando o item focado (Renomear)
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"] .menu-btn');
+  await page.waitForSelector('.menu [role="menuitem"]');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.dialogo:has-text("Renomear passo")');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.dialogo', { state: 'detached' });
+  // Alt+↓ (anunciado em «Mover para baixo») executa o item em vez de só navegar no menu; Alt+↑ desfaz
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"] .menu-btn');
+  await page.waitForSelector('.menu [role="menuitem"]');
+  await page.keyboard.press('Alt+ArrowDown');
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].id === 'p_m1x4k9zr02ab', 'passo movido para baixo pelo menu');
+  assert.equal(await page.$('.menu'), null);
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"] .menu-btn');
+  await page.waitForSelector('.menu [role="menuitem"]');
+  await page.keyboard.press('Alt+ArrowUp');
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].id === 'p_m1x4k9zr02ab', 'passo de volta ao lugar');
+});
+
+test('mudar o tipo para Seção remove imagem, anotações e alvo (com confirmação; desfazível)', async () => {
+  const antes = await lerGuia(ID_EXEMPLO);
+  await page.selectOption('#passo-tipo', 'secao');
+  await page.waitForSelector('.dialogo:has-text("Transformar em seção")');
+  await page.click('.dialogo .dxt-btn:has-text("Transformar")');
+  const guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].tipo === 'secao', 'passo virou seção');
+  const p = guia.passos[1];
+  assert.deepEqual({ captura: p.captura, anotacoes: p.anotacoes, alvo: p.alvo, evento: p.evento }, { captura: null, anotacoes: [], alvo: null, evento: null });
+  await page.waitForFunction(() => document.querySelector('.canvas-palco')?.hidden && /Seções não têm imagem/.test(document.querySelector('.canvas-vazio')?.textContent ?? ''));
+  assert.equal(await page.$('.passo-cartao[data-id="p_m1x4k9zr02ab"] .passo-cartao-mini'), null, 'cartão de seção sem miniatura');
+  // desfazer restaura tudo
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press('Control+z');
+  const restaurado = await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].tipo === 'clicar', 'tipo restaurado');
+  assert.deepEqual(restaurado.passos[1].captura, antes.passos[1].captura);
+  assert.equal(restaurado.passos[1].anotacoes.length, antes.passos[1].anotacoes.length);
+  await page.waitForFunction(() => !document.querySelector('.canvas-palco')?.hidden);
+  // cancelar na confirmação mantém o tipo
+  await page.selectOption('#passo-tipo', 'secao');
+  await page.waitForSelector('.dialogo:has-text("Transformar em seção")');
+  await page.click('.dialogo .dxt-btn:has-text("Cancelar")');
+  await page.waitForSelector('.dialogo', { state: 'detached' });
+  assert.equal(await page.$eval('#passo-tipo', (s) => s.value), 'clicar');
+});
+
+test('falha ao gravar a imagem anexada vira aviso, não rejeição silenciosa', async () => {
+  const antes = await lerGuia(ID_EXEMPLO);
+  await page.evaluate(() => { window.__sbsTeste.falharImagem = '*'; });
+  await page.setInputFiles('#passo-imagem-arquivo', { name: 'nova.png', mimeType: 'image/png', buffer: await readFile(join(FIXTURES, 'guia-exemplo', 'imagens', 'img_m1x4k9zr01aa.png')) });
+  await page.waitForSelector('.aviso--erro:has-text("Não foi possível gravar a imagem")');
+  await page.evaluate(() => { window.__sbsTeste.falharImagem = null; });
+  await page.waitForTimeout(500);
+  const depois = await lerGuia(ID_EXEMPLO);
+  assert.equal(depois.passos[1].captura.imagemId, antes.passos[1].captura.imagemId, 'a imagem do passo não mudou');
+  assert.equal(depois.passos[1].anotacoes.length, antes.passos[1].anotacoes.length);
+});
+
+test('dois hashchange seguidos enquanto o editor fecha montam uma tela só (sem atalhos duplicados)', async () => {
+  await page.fill('#guia-autor', 'Equipe de TI');   // alteração pendente: o fechamento espera a gravação
+  await page.evaluate((id) => { location.hash = '#/'; location.hash = `#/guia/${id}`; }, ID_MAC);
+  await page.waitForFunction(() => document.querySelectorAll('.passo-cartao').length === 6 && document.querySelector('#guia-titulo')?.value === 'Gravação — SAP GUI');
+  assert.deepEqual(await page.evaluate(() => [document.querySelectorAll('#editor').length, document.querySelectorAll('#canvas-vis').length, document.querySelectorAll('.biblioteca').length]), [1, 1, 0], 'um editor, um canvas, nenhuma biblioteca sobrando');
+  await page.click('#btn-novo-passo');
+  await page.click('#btn-novo-passo');
+  await esperarGuia(ID_MAC, (g) => g.passos.length === 8, 'dois passos inseridos');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => document.querySelectorAll('.passo-cartao').length < 8);
+  assert.equal((await page.$$('.passo-cartao')).length, 7, 'um Ctrl+Z desfaz uma inserção só (um único handler de atalhos)');
+  await esperarGuia(ID_MAC, (g) => g.passos.length === 7, 'gravado com 7 passos');
+  await page.keyboard.press('Control+z');
+  await esperarGuia(ID_MAC, (g) => g.passos.length === 6, 'de volta aos 6 passos');
+  assert.equal((await lerGuia(ID_EXEMPLO)).autor, 'Equipe de TI', 'a alteração pendente do editor anterior foi gravada');
+});
+
+test('diálogos aninhados: só o do topo trata Esc e Tab; cancelar a importação não é erro', async () => {
+  await page.goto(url('/editor/#/'));
+  await page.waitForSelector('#btn-importar');
+  await page.click('#btn-importar');
+  await page.setInputFiles('#importar-arquivo', { name: 'guia-exemplo.stepbystep.zip', mimeType: 'application/zip', buffer: await zipDaPasta('guia-exemplo') });
+  await page.waitForSelector('.dialogo:has-text("Guia já existe")');
+  assert.equal((await page.$$('.dialogo')).length, 2);
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press(i % 2 ? 'Shift+Tab' : 'Tab');
+    assert.ok(await page.evaluate(() => document.querySelectorAll('.dialogo')[1].contains(document.activeElement)), `Tab ${i}: foco preso no diálogo do topo`);
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.dialogo:has-text("Guia já existe")', { state: 'detached' });
+  assert.equal((await page.$$('.dialogo')).length, 1, 'o diálogo de importação continua aberto');
+  await page.waitForTimeout(300);
+  assert.ok(!errosDePagina.some((e) => /Importação cancelada/.test(e)), 'cancelar não é registrado como erro');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.dialogo', { state: 'detached' });
+});
+
+test('«Substituir» na importação só apaga o original depois de a importação terminar', async () => {
+  await page.click('#btn-importar');
+  await page.evaluate(() => { window.__sbsTeste.falharImagem = 'img_m1x4k9zr04ad'; });   // a 3ª imagem falha ao gravar (cota)
+  await page.setInputFiles('#importar-arquivo', { name: 'guia-exemplo.stepbystep.zip', mimeType: 'application/zip', buffer: await zipDaPasta('guia-exemplo') });
+  await page.waitForSelector('.dialogo:has-text("Guia já existe")');
+  await page.click('.dialogo .dxt-btn:has-text("Substituir")');
+  await page.waitForSelector('.aviso--erro:has-text("cota simulada")');
+  await page.evaluate(() => { window.__sbsTeste.falharImagem = null; });
+  const guia = await lerGuia(ID_EXEMPLO);
+  assert.ok(guia, 'o guia original continua na biblioteca');
+  assert.equal(guia.passos.length, 10);
+  assert.equal(guia.passos[1].descricao, 'Observação digitada letra a letra', 'com as edições feitas no editor');
+  assert.equal((await imagensDoGuia(ID_EXEMPLO)).length, 7, 'e com todas as imagens');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.dialogo', { state: 'detached' });
+  // a falha real foi registrada no console (esperado neste teste): não conta como erro da página
+  const i = errosDePagina.findIndex((e) => /Falha na importação/.test(e));
+  assert.ok(i >= 0, 'a falha foi registrada no console');
+  errosDePagina.splice(i, 1);
+});
+
+test('gravação de outra aba não é sobrescrita: o editor entra em conflito, avisa e não apaga imagens ao sair', async () => {
+  await page.goto(url(`/editor/#/guia/${ID_EXEMPLO}`));
+  await page.waitForSelector('.passo-cartao');
+  await gravarComoOutraAba(ID_EXEMPLO, (g) => { g.titulo = 'Alterado em outra aba'; });
+  await page.click('#passo-descricao');
+  await page.keyboard.type(' (edição que não pode sobrescrever)');
+  await page.waitForFunction(() => /outra aba/.test(document.querySelector('#estado-salvamento')?.textContent ?? ''));
+  await page.waitForSelector('.aviso--erro:has-text("outra aba")');
+  await page.waitForTimeout(500);
+  const guia = await lerGuia(ID_EXEMPLO);
+  assert.equal(guia.titulo, 'Alterado em outra aba', 'a versão mais nova do banco ficou intacta');
+  assert.equal(guia.passos[1].descricao, 'Observação digitada letra a letra');
+  await page.goto(url('/editor/#/'));
+  await page.waitForSelector('.guia-cartao');
+  assert.equal(await page.$eval(`.guia-cartao[data-id="${ID_EXEMPLO}"] .guia-cartao-titulo`, (e) => e.textContent), 'Alterado em outra aba');
+  assert.equal((await imagensDoGuia(ID_EXEMPLO)).length, 7, 'nenhuma imagem apagada com base na cópia velha');
 });
 
 test('a biblioteca lista os dois guias e a página não registrou erros', async () => {

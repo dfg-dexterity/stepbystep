@@ -9,7 +9,7 @@ import {
 } from './sw/gravacao.js';
 import {
   aoCommitted, aoDomContentLoaded, aoCompleted, aoHistoryStateUpdated, aoReferenceFragmentUpdated,
-  aoCreatedNavigationTarget, aoAbaAtivada, aoAbaRemovida,
+  aoCreatedNavigationTarget, aoAbaAtivada, aoJanelaFocada, aoAbaRemovida,
 } from './sw/navegacao.js';
 
 // content scripts precisam ler a chave 'gravacao'
@@ -81,6 +81,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(aoHistoryStateUpdated);
 chrome.webNavigation.onReferenceFragmentUpdated.addListener(aoReferenceFragmentUpdated);
 chrome.webNavigation.onCreatedNavigationTarget.addListener(aoCreatedNavigationTarget);
 chrome.tabs.onActivated.addListener(aoAbaAtivada);
+chrome.windows.onFocusChanged.addListener(aoJanelaFocada);
 chrome.tabs.onRemoved.addListener((tabId) => aoAbaRemovida(tabId));
 chrome.commands.onCommand.addListener((comando) => { if (comando === 'alternar-gravacao') alternarGravacao(); });
 chrome.alarms.onAlarm.addListener((alarme) => { if (alarme.name === ALARME) verificarAbas(); });

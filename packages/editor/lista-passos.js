@@ -7,7 +7,7 @@ import { desenharPasso } from '../core/render-canvas.js';
 import { separarRecorte, areaSaida } from '../core/anotacoes.js';
 import { estado, on, selecionarPasso, indiceDoPasso, plataformaDoGuia, temImagem } from './estado.js';
 import { aplicar } from './historico.js';
-import { obterBitmap, criarCanvas } from './canvas-anotacao.js';
+import { obterBitmap, esquecerBitmap, bitmapFechado, criarCanvas } from './canvas-anotacao.js';
 import { abrirMenu } from './componentes/menu.js';
 import { confirmar, perguntar } from './componentes/dialogo.js';
 import { avisar } from './componentes/aviso.js';
@@ -209,11 +209,13 @@ export function montarListaPassos(raiz) {
   raiz.append(ol, indicador, vazio);
 
   const miniaturas = new Map(); // passoId → { assinatura, canvas }
+  const cartoes = new Map();    // passoId → { li, assinatura }: o cartão só é recriado quando algo visível nele muda
   const fila = [];
   let processando = false;
   let destruido = false;
 
   const assinatura = (p, guia) => `${p.captura?.imagemId}|${JSON.stringify(p.anotacoes)}|${guia.estilo?.cor}|${guia.estilo?.escurecerFora}`;
+  const assinaturaCartao = (p, i, guia) => [p.tipo, numeroDoPasso(guia, i), p.titulo, !!p.captura?.faltante, !!p.evento?.sensivel, temImagem(p), assinatura(p, guia)].join('\u0000');
 
   async function renderizarMiniatura(passoId, alvo) {
     const guia = estado.guia;
@@ -222,7 +224,8 @@ export function montarListaPassos(raiz) {
     const ass = assinatura(passo, guia);
     const cacheado = miniaturas.get(passoId);
     if (cacheado && cacheado.assinatura === ass) { alvo.replaceChildren(cacheado.canvas); return; }
-    const bmp = await obterBitmap(passo.captura.imagemId);
+    let bmp = await obterBitmap(passo.captura.imagemId);
+    if (bitmapFechado(bmp)) { esquecerBitmap(passo.captura.imagemId); bmp = await obterBitmap(passo.captura.imagemId); }   // fechado pelo LRU: recarrega
     if (destruido || !bmp || !alvo.isConnected) return;
     const imagem = { largura: bmp.width, altura: bmp.height, fonte: bmp };
     const { recorte } = separarRecorte(passo.anotacoes);
@@ -289,9 +292,8 @@ export function montarListaPassos(raiz) {
     li.className = `passo-cartao passo-cartao--${passo.tipo}`;
     li.dataset.id = passo.id;
     li.tabIndex = 0;
-    li.setAttribute('role', 'option');
-    li.setAttribute('aria-selected', String(passo.id === estado.passoAtualId));
-    if (passo.id === estado.passoAtualId) li.classList.add('is-atual');
+    // lista comum (<ol>/<li>): um item com botão «⋯» dentro não pode ser option de listbox; o atual leva aria-current
+    if (passo.id === estado.passoAtualId) { li.classList.add('is-atual'); li.setAttribute('aria-current', 'true'); }
     const n = numeroDoPasso(guia, indice);
 
     if (passo.tipo !== 'secao') {
@@ -405,24 +407,49 @@ export function montarListaPassos(raiz) {
     li?.focus({ preventScroll: false });
   }
 
+  /** Cartão que sai da lista: a miniatura pendente deixa de ser observada (a fila ignora nós desconectados). */
+  function descartarCartao(li) {
+    const mini = li.querySelector('.passo-cartao-mini');
+    if (mini) visiveis.unobserve(mini);
+  }
+
+  /**
+   * Reconcilia a lista com o guia: cartões cuja assinatura (tipo, número, título, selos, miniatura) não mudou são
+   * reaproveitados — digitar na descrição emite 'mudou' a cada tecla e não pode recriar centenas de nós.
+   */
   function renderizar() {
     const guia = estado.guia;
-    visiveis.disconnect();
-    fila.length = 0;
-    ol.replaceChildren();
-    if (!guia) { vazio.hidden = true; return; }
+    if (!guia) {
+      for (const { li } of cartoes.values()) descartarCartao(li);
+      cartoes.clear();
+      fila.length = 0;
+      ol.replaceChildren();
+      vazio.hidden = true;
+      return;
+    }
     vazio.hidden = guia.passos.length > 0;
-    // esquece miniaturas de passos que não existem mais
+    // esquece miniaturas e cartões de passos que não existem mais
     const ids = new Set(guia.passos.map((p) => p.id));
     for (const id of [...miniaturas.keys()]) if (!ids.has(id)) miniaturas.delete(id);
-    guia.passos.forEach((p, i) => ol.append(cartao(p, i)));
+    for (const [id, c] of [...cartoes]) if (!ids.has(id)) { descartarCartao(c.li); cartoes.delete(id); }
+    const desejados = guia.passos.map((p, i) => {
+      const ass = assinaturaCartao(p, i, guia);
+      const c = cartoes.get(p.id);
+      if (c && c.assinatura === ass) return c.li;
+      if (c) descartarCartao(c.li);
+      const li = cartao(p, i);
+      cartoes.set(p.id, { li, assinatura: ass });
+      return li;
+    });
+    const atuais = [...ol.children];
+    if (desejados.length !== atuais.length || desejados.some((li, i) => li !== atuais[i])) ol.replaceChildren(...desejados);
   }
 
   function marcarAtual() {
     for (const li of ol.children) {
       const atual = li.dataset.id === estado.passoAtualId;
       li.classList.toggle('is-atual', atual);
-      li.setAttribute('aria-selected', String(atual));
+      if (atual) li.setAttribute('aria-current', 'true'); else li.removeAttribute('aria-current');
       if (atual && !li.matches(':focus-within')) li.scrollIntoView({ block: 'nearest' });
     }
   }
@@ -437,6 +464,6 @@ export function montarListaPassos(raiz) {
   return {
     renderizar,
     focarPasso,
-    destruir() { destruido = true; cancelar(); visiveis.disconnect(); miniaturas.clear(); raiz.replaceChildren(); },
+    destruir() { destruido = true; cancelar(); visiveis.disconnect(); miniaturas.clear(); cartoes.clear(); raiz.replaceChildren(); },
   };
 }

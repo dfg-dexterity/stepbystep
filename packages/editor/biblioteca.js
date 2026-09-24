@@ -45,6 +45,12 @@ export function montarBiblioteca(raiz, opcoes) {
     for (const g of interrompidos) {
       const b = el('div', 'banner banner--atencao');
       b.setAttribute('role', 'status');
+      if (g.estado === 'gravando') {
+        // o gravador ainda insere passos: abrir no editor gravaria por cima deles (o editor recusa; aqui nem se oferece)
+        b.append(el('span', 'banner-texto', `Gravação em andamento — «${g.titulo || 'Sem título'}» (${g.qtdPassos} passos). Pare a gravação na extensão para editar.`));
+        banner.append(b);
+        continue;
+      }
       b.append(el('span', 'banner-texto', `Gravação interrompida — «${g.titulo || 'Sem título'}» (${g.qtdPassos} passos)`));
       const abrir = el('button', 'dxt-btn dxt-btn--sm', 'Abrir');
       abrir.type = 'button';
@@ -91,8 +97,11 @@ export function montarBiblioteca(raiz, opcoes) {
     const n = el('span', 'dxt-num', String(g.qtdPassos));
     meta.append(n, ` ${g.qtdPassos === 1 ? 'passo' : 'passos'} · ${formatarData(g.atualizadoEm)}`);
     const acoes = el('div', 'guia-cartao-acoes');
+    const gravando = g.estado === 'gravando';
     const abrir = el('button', 'dxt-btn dxt-btn--sm', 'Abrir');
     abrir.type = 'button';
+    abrir.disabled = gravando;
+    if (gravando) abrir.title = 'Pare a gravação na extensão para editar este guia';
     abrir.addEventListener('click', () => opcoes.abrirGuia(g.id));
     const excluir = el('button', 'dxt-btn dxt-btn--ghost dxt-btn--sm', 'Excluir');
     excluir.type = 'button';
@@ -105,7 +114,7 @@ export function montarBiblioteca(raiz, opcoes) {
     });
     acoes.append(abrir, excluir);
     c.append(topo, titulo, meta, acoes);
-    c.addEventListener('dblclick', () => opcoes.abrirGuia(g.id));
+    c.addEventListener('dblclick', () => { if (!gravando) opcoes.abrirGuia(g.id); });
     return c;
   }
 
@@ -167,9 +176,10 @@ export function montarBiblioteca(raiz, opcoes) {
         for (const a of r.avisos) avisar(a, { tipo: 'atencao', duracao: 8000 });
         opcoes.abrirGuia(r.guiaId);
       } catch (e) {
-        console.error('Falha na importação', e);
         progresso.textContent = '';
-        if (e?.message !== 'Importação cancelada') avisar(e?.message || 'Não foi possível importar.', { tipo: 'erro' });
+        if (e?.message === 'Importação cancelada') return;   // o usuário desistiu no diálogo de conflito: não é erro
+        console.error('Falha na importação', e);
+        avisar(e?.message || 'Não foi possível importar.', { tipo: 'erro' });
       } finally {
         ocupado = false;
       }

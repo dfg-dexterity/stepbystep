@@ -10,7 +10,11 @@ import { estado, on, passoAtual, indiceDoPasso, selecionarAnotacao, temImagem } 
 import { aplicar } from './historico.js';
 import { regerarTitulo, renomearPasso, NOMES_TIPO } from './lista-passos.js';
 import { excluirAnotacao } from './ferramentas.js';
+import { confirmar } from './componentes/dialogo.js';
 import { avisar } from './componentes/aviso.js';
+
+/** Falha inesperada ao anexar (os erros previstos já viram aviso dentro de anexarImagemAoPasso). */
+const aoFalharAnexo = (e) => { console.warn('Falha ao anexar a imagem', e); avisar(e?.message || 'Não foi possível anexar a imagem.', { tipo: 'erro' }); };
 
 export const NOMES_COR = { cerceta: 'Cerceta', ambar: 'Âmbar', roxo: 'Roxo', base: 'Base (escuro)', off: 'Off-white' };
 const NOMES_ANOTACAO = { recorte: 'Recorte', desfoque: 'Desfoque', retangulo: 'Retângulo', seta: 'Seta', marcador: 'Marcador', texto: 'Texto' };
@@ -35,7 +39,14 @@ export async function anexarImagemAoPasso(passoId, blob) {
   const largura = bitmap.width, altura = bitmap.height;
   bitmap.close();
   const id = gerarId('img');
-  await salvarImagem({ id, guiaId: guia.id, blob, largura, altura, mime: blob.type });
+  try {
+    await salvarImagem({ id, guiaId: guia.id, blob, largura, altura, mime: blob.type });
+  } catch (e) {
+    // cota estourada ou transação falha: sem aviso o passo ficaria «Sem imagem» sem explicação
+    console.warn('Falha ao gravar a imagem anexada', e);
+    avisar('Não foi possível gravar a imagem neste navegador (espaço insuficiente?). Exclua guias antigos ou exporte um .stepbystep.zip e tente de novo.', { tipo: 'erro' });
+    return;
+  }
   aplicar('anexar imagem', (g) => {
     const p = g.passos.find((x) => x.id === passoId);
     if (!p) return;
@@ -65,7 +76,7 @@ export function colarImagem(evento) {
   const arquivo = item?.getAsFile();
   if (!arquivo) return false;
   evento.preventDefault();
-  anexarImagemAoPasso(passo.id, arquivo);
+  anexarImagemAoPasso(passo.id, arquivo).catch(aoFalharAnexo);
   return true;
 }
 
@@ -164,15 +175,23 @@ export function montarPainel(raiz, opcoes = {}) {
     if (!p) return;
     aplicar('editar descrição', (g) => { const x = g.passos.find((y) => y.id === p.id); if (x) x.descricao = descricao.value; }, { coalescer: `descricao:${p.id}` });
   });
-  tipo.addEventListener('change', () => {
+  tipo.addEventListener('change', async () => {
     const p = passoAtual();
     if (!p) return;
+    const novo = tipo.value;
+    // seção é só um título (3.5: captura, alvo e evento nulos): o que o passo tinha vai embora, com confirmação
+    if (novo === 'secao' && (p.captura || p.anotacoes.length || p.alvo)) {
+      const ok = await confirmar('Uma seção é só um título: a imagem, as anotações e o alvo deste passo serão removidos (dá para desfazer com Ctrl/⌘+Z). Continuar?', { titulo: 'Transformar em seção', ok: 'Transformar', perigo: true });
+      if (!ok) { tipo.value = passoAtual()?.tipo ?? p.tipo; return; }
+    }
     aplicar('mudar tipo do passo', (g) => {
       const x = g.passos.find((y) => y.id === p.id);
       if (!x) return;
-      x.tipo = tipo.value;
-      if (tipo.value === 'secao' || tipo.value === 'manual') x.tituloAuto = false;
+      x.tipo = novo;
+      if (novo === 'secao' || novo === 'manual') x.tituloAuto = false;
+      if (novo === 'secao') { x.captura = null; x.anotacoes = []; x.alvo = null; x.evento = null; x.resultado = null; }
     });
+    if (novo === 'secao') selecionarAnotacao(null);
   });
   corGuia.addEventListener('change', () => aplicar('mudar cor de destaque', (g) => { g.estilo.cor = corGuia.value; }));
   holofote.addEventListener('change', () => aplicar('holofote', (g) => { g.estilo.escurecerFora = holofote.checked; }));
@@ -189,7 +208,7 @@ export function montarPainel(raiz, opcoes = {}) {
     entrada.accept = 'image/png,image/jpeg,image/webp';
     entrada.hidden = true;
     entrada.id = 'passo-imagem-arquivo';
-    entrada.addEventListener('change', () => { const f = entrada.files?.[0]; if (f) anexarImagemAoPasso(p.id, f); entrada.value = ''; });
+    entrada.addEventListener('change', () => { const f = entrada.files?.[0]; if (f) anexarImagemAoPasso(p.id, f).catch(aoFalharAnexo); entrada.value = ''; });
     const botao = el('label', 'dxt-btn dxt-btn--ghost dxt-btn--sm');
     botao.htmlFor = entrada.id;
     if (temImagem(p)) {

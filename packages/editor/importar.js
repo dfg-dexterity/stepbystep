@@ -1,13 +1,14 @@
 // Importação: .json (só metadados), .zip/.stepbystep.zip (lerZip + lerPacote) e pasta
 // (webkitdirectory ou arrastar com webkitGetAsEntry). Mede cada PNG, grava as imagens no
-// IndexedDB, gera os títulos vazios (Mac) e resolve conflito de id (substituir/duplicar).
+// IndexedDB, gera os títulos vazios (Mac) e resolve conflito de id (substituir — sem apagar o original
+// antes de a importação terminar — ou duplicar).
 import { lerZip } from '../core/zip.js';
 import { lerPacote, NOME_GUIDE } from '../core/pacote.js';
 import { migrarGuia, validarGuia, renumerarMarcadores } from '../core/modelo.js';
 import { gerarTitulo } from '../core/frases.js';
 import { gerarId } from '../core/ids.js';
 import { anotacoesAutomaticas } from '../core/anotacoes.js';
-import { carregarGuia, excluirGuia, salvarGuia, salvarImagem } from '../core/armazenamento.js';
+import { carregarGuia, salvarGuia, salvarImagem, excluirImagensOrfas } from '../core/armazenamento.js';
 import { plataformaDoGuia } from './estado.js';
 
 /** @typedef {{caminho:string, arquivo:Blob}} Entrada */
@@ -131,13 +132,16 @@ export async function importarEntradas(entradas, opcoes = {}) {
   const { guia, avisos } = lido;
   let imagens = lido.imagens;
 
-  // conflito de id: substituir o guia existente ou importar como cópia
+  // conflito de id: substituir o guia existente ou importar como cópia. Ao substituir, nada é apagado antes de a
+  // importação terminar: as imagens novas gravam por cima (mesmos ids), o guia novo substitui o registro e só então
+  // as imagens que sobraram do antigo saem como órfãs — uma falha no meio (cota, aba fechada) preserva o original.
   const existente = await carregarGuia(guia.id);
+  let substituir = false;
   if (existente) {
     const decisao = opcoes.resolverConflito ? await opcoes.resolverConflito(existente) : 'duplicar';
     if (!decisao) throw new Error('Importação cancelada');
     if (decisao === 'duplicar') imagens = remapearIds(guia, imagens);
-    else await excluirGuia(guia.id);
+    else substituir = true;
   }
 
   // imagens: mede no bitmap (garante largura/altura/escala) e grava no IndexedDB
@@ -171,6 +175,9 @@ export async function importarEntradas(entradas, opcoes = {}) {
   if (guia.estado === 'gravando') guia.estado = 'concluido';
   progresso({ fase: 'salvando', atual: 1, total: 1 });
   await salvarGuia(guia);
+  if (substituir) {
+    try { await excluirImagensOrfas(guia); } catch (e) { console.warn('Imagens do guia substituído não foram limpas', e); }
+  }
   try { await navigator.storage?.persist?.(); } catch { /* sem permissão: segue sem persistência garantida */ }
   return { guiaId: guia.id, titulo: guia.titulo, passos: guia.passos.length, avisos };
 }

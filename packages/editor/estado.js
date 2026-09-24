@@ -99,4 +99,5 @@ export function plataformaDoGuia(guia) {
   return 'outro';
 }
 
-export const temImagem = (passo) => !!(passo?.captura && !passo.captura.faltante && passo.captura.imagemId);
+/** Passo com imagem utilizável; seções nunca têm imagem (3.5), mesmo que um registro antigo ainda traga `captura`. */
+export const temImagem = (passo) => !!(passo && passo.tipo !== 'secao' && passo.captura && !passo.captura.faltante && passo.captura.imagemId);

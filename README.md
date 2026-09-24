@@ -57,10 +57,11 @@ Gravar e removidos ao parar.
 
 ### Gravar no navegador
 
-1. Na aba do processo, clique no ícone › **Iniciar** (ou Alt+Shift+R). Aparece a barra flutuante
+1. Na aba do processo, clique no ícone › **Iniciar gravação** (ou Alt+Shift+R). Aparece a barra flutuante
    "Gravando · n passos" e o badge do ícone fica cerceta.
 2. Execute o processo normalmente. Cliques, digitação (confirmada ao sair do campo/Enter), seleções, marcações,
-   Enter e atalhos viram passos; navegações viram "Navegue para …". **+ Passo manual** insere um passo de texto.
+   Enter e atalhos viram passos; navegações viram "Navegue para …". O botão **+** da barra (Passo manual)
+   insere um passo de texto.
 3. **Pausar** ignora eventos (badge âmbar); **Parar** encerra e abre o guia no editor.
 
 Páginas `chrome://`, a Chrome Web Store e PDFs não podem ser gravados — use o popup e passos manuais.
@@ -141,7 +142,7 @@ requisição, `rich_text` ≤ 2000 caracteres), `Notion-Version: 2022-06-28` fix
   previews `https://stepbystep-*.vercel.app` são aceitos automaticamente). Atrás do proxy o corpo é limitado a
   4,5 MB pela Vercel — o editor reduz imagens acima de 4 MB.
 
-O token fica no IndexedDB do usuário (botão **Esquecer** apaga); nunca vai para o guia, para o código nem
+O token fica no IndexedDB do usuário (botão **Esquecer token** apaga); nunca vai para o guia, para o código nem
 para o servidor.
 
 ## Testes
@@ -165,7 +166,7 @@ npm run sincronizar # necessário antes do e2e e para tests/sincronizacao.test.m
   Cada arquivo sobe `scripts/dev-server.mjs` numa porta livre com `NOTION_BASE` apontando para o Notion falso.
 - `swift test` só roda no Mac (e no job `macos-latest` do CI).
 
-Servidor local com os mesmos rewrites da Vercel (`/` → `/editor/`, `/editor/*` → `packages/editor/*`,
+Servidor local com os mesmos redirects e rewrites da Vercel (`/` e `/editor` → `/editor/`, `/editor/*` → `packages/editor/*`,
 `/core/*` → `packages/core/*`, mais `/tests/*` e `/packages/*`) e as funções `/api`:
 
 ```bash
@@ -177,15 +178,15 @@ NOTION_BASE=http://127.0.0.1:8090 npm run dev        # editor local publicando n
 ## Publicação
 
 - **Editor + API**: Vercel, time `dexterityit`, projeto `stepbystep-dexterity`, vinculado ao repositório —
-  push na branch padrão = produção em <https://stepbystep-dexterity.vercel.app> (`/` redireciona para
-  `/editor/`). `vercel.json` fixa região `gru1`, rewrites `/editor/*` e `/core/*`, `maxDuration: 60` para
+  push na branch padrão = produção em <https://stepbystep-dexterity.vercel.app> (`/` e `/editor` redirecionam
+  para `/editor/`). `vercel.json` fixa região `gru1`, rewrites `/editor/*` e `/core/*`, `maxDuration: 60` para
   `api/**` e cache de 5 min nos estáticos. `.vercelignore` deixa de fora extensão, Mac, testes, scripts e docs.
 - **Verificação**: o workflow **Verificar publicação** (`.github/workflows/verificar-publicacao.yml`) roda a
   cada deploy de produção (e manualmente) e compara o `sha256sum` de `packages/editor/app.js`,
   `packages/core/modelo.js` e outros arquivos com o que `GET /api/hash?path=/editor/app.js` (e `/core/...`)
   devolve do site, além de conferir o preflight e a allow-list de `/api/notion`.
 - **Testes no CI**: **Testes** (`.github/workflows/testes.yml`) — job Ubuntu (`npm ci`, Chromium do
-  Playwright, `npm run sincronizar`, `npm test`, `npm run test:e2e` com fallback `xvfb-run`) e job
+  Playwright, `npm run sincronizar`, `npm test`, `npm run test:e2e` em headless novo) e job
   `macos-latest` (`swift build -c release` e `swift test` em `packages/mac`), que é o único guarda-corpo real
   do código Swift escrito fora do Mac.
 - **Extensão**: zip gerado por `npm run empacotar`, distribuído internamente ("carregar sem compactação").

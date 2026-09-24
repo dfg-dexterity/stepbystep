@@ -1,6 +1,6 @@
 /**
- * Servidor local de desenvolvimento: estáticos com os MESMOS rewrites do vercel.json
- * (/ → /editor/, /editor/* → packages/editor/*, /core/* → packages/core/*), mais
+ * Servidor local de desenvolvimento: estáticos com os MESMOS redirects e rewrites do vercel.json
+ * (/ e /editor → /editor/, /editor/* → packages/editor/*, /core/* → packages/core/*), mais
  * /tests/* e /packages/* para os testes, /api/notion/* (handler Web: monta um Request a
  * partir do IncomingMessage e chama o default export) e /api/hash (assinatura Node).
  *
@@ -30,9 +30,17 @@ const MIME = {
 // Cabeçalhos de salto (e os que o fetch recalcula) não entram no Request montado.
 const NAO_REPASSAR = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive', 'expect', 'upgrade']);
 
+/** Redirects do vercel.json (`/` e `/editor` sem barra → `/editor/`). Devolve o destino ou null. */
+export function resolverRedirect(pathname) {
+  // index.html do editor referencia app.js/app.css/fontes.css por caminho relativo: servido em /editor
+  // (sem barra) o navegador pediria /app.js, que não existe. Por isso é redirect, não rewrite.
+  if (pathname === '/' || pathname === '/editor') return '/editor/';
+  return null;
+}
+
 /** Mesmos rewrites do vercel.json (+ /tests e /packages para os testes). Devolve caminho relativo à raiz ou null. */
 export function resolverRewrite(pathname) {
-  if (pathname === '/editor' || pathname === '/editor/') return 'packages/editor/index.html';
+  if (pathname === '/editor/') return 'packages/editor/index.html';
   if (pathname.startsWith('/editor/')) return 'packages/editor/' + pathname.slice('/editor/'.length);
   if (pathname.startsWith('/core/')) return 'packages/core/' + pathname.slice('/core/'.length);
   if (pathname.startsWith('/tests/') || pathname.startsWith('/packages/')) return pathname.slice(1);
@@ -135,8 +143,9 @@ export function iniciarServidor({ porta = Number(process.env.PORT ?? 8080) } = {
     const portaReal = servidor.address().port;
     const url = new URL(req.url, `http://127.0.0.1:${portaReal}`);
     try {
-      if (url.pathname === '/') {
-        res.writeHead(307, { location: '/editor/', 'cache-control': 'no-store' });   // redirect não permanente, como na Vercel
+      const destino = resolverRedirect(url.pathname);
+      if (destino) {
+        res.writeHead(307, { location: destino, 'cache-control': 'no-store' });   // redirect não permanente, como na Vercel
         return res.end();
       }
       if (url.pathname.startsWith('/api/')) return await tratarApi(req, res, url, portaReal);

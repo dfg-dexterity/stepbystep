@@ -1,13 +1,15 @@
-#!/bin/sh
+#!/bin/bash
 # Monta build/StepByStep.app a partir do binário release e assina com a identidade estável
 # (certificado autoassinado "StepByStep Dev" — ver README). Com assinatura estável o TCC mantém
 # as permissões entre builds; ad-hoc ("-") muda o cdhash e pede tudo de novo.
-set -eu
+# `pipefail`: um erro do `swift build` interrompe aqui — nunca empacota o binário de um build anterior.
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IDENTIDADE="${IDENTIDADE:-StepByStep Dev}"
 APP="build/StepByStep.app"
 
+mkdir -p build
 swift build -c release 2>&1 | tee build/build.log
 BIN="$(swift build -c release --show-bin-path)/StepByStep"
 

@@ -172,7 +172,13 @@ export function ligarFerramentas(canvas) {
   let gesto = null;
   let editorTexto = null; // { textarea, passoId, ponto, existente }
 
-  const imagemDims = (passo) => canvas.imagemAtual() ?? { largura: passo.captura.largura, altura: passo.captura.altura };
+  // Limites dos gestos: as medidas gravadas na captura (medidas no bitmap ao capturar/importar/anexar). O bitmap do
+  // canvas é só reserva — o cache LRU pode tê-lo fechado (0×0), o que descartaria ou zeraria a anotação.
+  const imagemDims = (passo) => {
+    const c = passo.captura ?? {};
+    if (c.largura > 0 && c.altura > 0) return { largura: c.largura, altura: c.altura };
+    return canvas.imagemAtual() ?? { largura: c.largura ?? 0, altura: c.altura ?? 0 };
+  };
 
   function alcaEm(sel, p) {
     const tol = 8 / estado.zoom;
@@ -360,7 +366,8 @@ export function ligarFerramentas(canvas) {
     ta.addEventListener('input', ajustar);
     ta.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmarTexto(); }
+      // a anotação de texto é de uma linha só (3.3: o render usa um único fillText): Enter confirma, com ou sem Shift
+      if (e.key === 'Enter') { e.preventDefault(); confirmarTexto(); }
       else if (e.key === 'Escape') { e.preventDefault(); cancelarTexto(); }
     });
     ta.addEventListener('blur', () => { if (editorTexto?.textarea === ta) confirmarTexto(); });
@@ -373,7 +380,8 @@ export function ligarFerramentas(canvas) {
     if (!editorTexto) return;
     const { textarea, passoId, ponto, existente, tamanho, cor, fundo } = editorTexto;
     editorTexto = null;
-    const texto = textarea.value.replace(/\s+$/g, '');
+    // quebras de linha (colagem) viram espaço: o canvas desenharia tudo numa linha com o fundo largo demais
+    const texto = textarea.value.replace(/\s*\n+\s*/g, ' ').replace(/\s+$/g, '');
     textarea.remove();
     if (existente) {
       if (texto === existente.texto) return;

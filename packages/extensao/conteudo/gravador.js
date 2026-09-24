@@ -10,6 +10,8 @@
   if (!runtime?.id || !storage) return;
 
   const ehTopo = window === window.top;
+  // no macOS, Option+tecla insere um caractere (ç, œ, €…); no Windows/Linux, Alt+tecla é atalho
+  const EH_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || '') || /Mac OS X/.test(navigator.userAgent || '');
   const SELETOR_INTERATIVO = 'button, a[href], input, select, textarea, summary, label, [contenteditable], [role=button], [role=link], [role=tab], [role=menuitem], [role=option], [role=checkbox], [role=radio], [role=switch], [role=combobox]';
   const PAPEIS = new Set(['button', 'link', 'textbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option']);
   const PAPEIS_MARCAR = new Set(['checkbox', 'radio', 'switch']);
@@ -27,7 +29,7 @@
 
   let ativo = false;
   let pausado = false;
-  let pendente = null;          // { el, valorInicial, alterado, timer }
+  let pendente = null;          // { el, valorInicial, alterado, timer, emUltimaTecla }
   let ultimoPointerdown = null; // { el, em }
   let filaEnvio = Promise.resolve();
   const aguardando = [];        // envios ainda esperando barra oculta + 2×rAF (despachados no pagehide)
@@ -373,16 +375,20 @@
   const valorDe = (el) => (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.value : el.innerText);
   const focado = (el) => document.activeElement === el || el.getRootNode?.()?.activeElement === el;
 
+  const novoPendente = (el, valorInicial) => ({ el, valorInicial, alterado: false, timer: null, emUltimaTecla: null });
+
   function iniciarPendente(el) {
     if (pendente?.el === el) return;
     if (pendente) clearTimeout(pendente.timer);
-    pendente = { el, valorInicial: valorDe(el), alterado: false, timer: null };
+    pendente = novoPendente(el, valorDe(el));
   }
 
   function montarDigitacao(p, confirmadoPor) {
     const alvo = descrever(p.el);
     const { sensivel, motivo } = classificarCampo({ tipoInput: alvo.tipoInput, autocomplete: alvo.autocomplete, nome: alvo.nome, id: alvo.id, campo: alvo.campo });
-    return { alvo, valor: sensivel ? null : valorDe(p.el), sensivel, motivo, confirmadoPor, ...comum(null, Date.now()) };
+    // `em` = última tecla, não o instante do flush: o SW ordena os passos por ele, e a confirmação por blur
+    // pode vir depois do pointerdown que a causou (clique em outro frame chega pelo próprio gravador de lá)
+    return { alvo, valor: sensivel ? null : valorDe(p.el), sensivel, motivo, confirmadoPor, ...comum(null, p.emUltimaTecla ?? Date.now()) };
   }
 
   /** Consome a digitação pendente; null se não houve alteração. Se o campo continua focado, rearma para a continuação. */
@@ -393,7 +399,7 @@
     pendente = null;
     const valor = valorDe(p.el);
     const payload = p.alterado && valor !== p.valorInicial ? montarDigitacao(p, confirmadoPor) : null;
-    if (p.el.isConnected && focado(p.el)) pendente = { el: p.el, valorInicial: valor, alterado: false, timer: null };
+    if (p.el.isConnected && focado(p.el)) pendente = novoPendente(p.el, valor);
     return payload;
   }
 
@@ -408,6 +414,21 @@
 
   const ligado = () => ativo && !pausado;
   const modificadoresDe = (e) => [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Meta'].filter(Boolean);
+  const naBarra = (e) => e.composedPath().some((n) => n instanceof Element && n.hasAttribute('data-sbs-barra'));
+
+  /** Combinação que insere caractere (AltGr no Windows/Linux, Option no macOS): é digitação, nunca atalho. */
+  function produzCaractere(e) {
+    if (e.getModifierState?.('AltGraph')) return true;
+    if (e.ctrlKey && e.altKey) return true; // o Chrome no Windows reporta AltGr como Ctrl+Alt
+    return EH_MAC && e.altKey && !e.ctrlKey && !e.metaKey;
+  }
+
+  /** Campo sensível (senha, cartão…): mesma classificação da digitação. */
+  function campoSensivel(el) {
+    if (!ehCampoTexto(el)) return false;
+    const d = descrever(el);
+    return classificarCampo({ tipoInput: d.tipoInput, autocomplete: d.autocomplete, nome: d.nome, id: d.id, campo: d.campo }).sensivel;
+  }
 
   function pointerdownRecente(el) {
     return !!ultimoPointerdown && Date.now() - ultimoPointerdown.em < JANELA_POINTERDOWN
@@ -419,8 +440,8 @@
   // ---------------------------------------------------------------------------
   window.addEventListener('pointerdown', (e) => {
     if (!ligado()) return;
+    if (naBarra(e)) return;
     const caminho = e.composedPath();
-    if (caminho.some((n) => n instanceof Element && n.hasAttribute('data-sbs-barra'))) return;
     const alvo = caminho[0];
     const elAlvo = alvo instanceof Element ? alvo : alvo?.parentElement ?? null;
     if (!elAlvo) return;
@@ -446,6 +467,7 @@
     if (!ligado() || !ehCampoTexto(e.target)) return;
     if (!pendente || pendente.el !== e.target) return; // sem focusin antes (ex.: autofill) não há valor inicial confiável
     pendente.alterado = true;
+    pendente.emUltimaTecla = Date.now();
     clearTimeout(pendente.timer);
     pendente.timer = setTimeout(() => flush('tempo'), TEMPO_DIGITACAO);
   }, true);
@@ -475,8 +497,10 @@
   }, true);
 
   window.addEventListener('keydown', (e) => {
-    if (!ligado() || e.isComposing || TECLAS_MODIFICADORAS.has(e.key)) return;
+    // tecla segurada (e.repeat) geraria um passo e uma captura por repetição
+    if (!ligado() || e.isComposing || e.repeat || TECLAS_MODIFICADORAS.has(e.key)) return;
     if (e.key === 'Tab' || e.key === 'Escape') return;
+    if (naBarra(e)) return; // Enter num botão da barra (shadow fechado: o alvo visto daqui é o host)
     const el = e.target instanceof Element ? e.target : null;
     const tag = el?.tagName.toLowerCase();
     const modificadores = modificadoresDe(e);
@@ -490,6 +514,9 @@
     const imprimivel = e.key.length === 1 && e.key.trim() !== '';
     const funcao = /^F([1-9]|1[0-2])$/.test(e.key);
     if (!imprimivel && !funcao) return;
+    // AltGr/Option + tecla é o próprio caractere digitado («/» em AltGr+Q, «ç» em Option+C): faz parte da
+    // digitação em curso, não a confirma; e num campo sensível caractere algum vira passo (vazaria a senha)
+    if (imprimivel && (produzCaractere(e) || (el && campoSensivel(el)))) return;
     enviarComCaptura('TECLA', { tecla: imprimivel ? e.key.toUpperCase() : e.key, modificadores, alvo: el ? descrever(el) : null, digitacaoPendente: consumirPendente('enter') }, em);
   }, true);
 

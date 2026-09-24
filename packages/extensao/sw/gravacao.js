@@ -5,7 +5,7 @@ import { criarGuia, renumerarMarcadores } from '../core/modelo.js';
 import { criarEstadoRedutor, reduzir } from '../core/redutor-eventos.js';
 import { salvarGuia, carregarGuia, listarGuias, excluirGuia } from '../core/armazenamento.js';
 import { lerEstado, gravarEstado, limparEstado } from './estado.js';
-import { capturar } from './captura.js';
+import { capturar, capturaFaltante, reaproveitarUltima } from './captura.js';
 
 export const ID_SCRIPTS = 'sbs';
 export const ARQUIVOS_CONTEUDO = ['conteudo/barra.js', 'conteudo/gravador.js'];
@@ -24,6 +24,11 @@ const FONTE_POR_TIPO = { PRE_CLIQUE: 'pointerdown', MARCACAO: 'pointerdown', TEC
 const OPCOES_REDUTOR = { plataforma: 'outro' };
 const ESPERA_PASSO_INICIAL = 300;
 const ESPERA_FLUSH = 150;
+// captureVisibleTab fotografa a aba ATIVA da janela: um evento de aba em segundo plano (flush por tempo,
+// focusout, página carregando) nunca é fotografado — a foto seria de outra aba, com conteúdo alheio
+export const MOTIVO_ABA_OCULTA = 'aba não visível';
+// digitação confirmada no pagehide: fotografar agora pegaria a página seguinte
+export const MOTIVO_DESCARREGADA = 'página descarregada';
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Fila serial: garante a ordem dos passos e leitura/escrita consistente do estado.
@@ -176,19 +181,19 @@ export async function aplicarAcoes(guiaId, acoes) {
   return resultado;
 }
 
-function patchDeCaptura(captura) {
+function patchDeCaptura(captura, abaId) {
   if (!captura || captura.faltante || captura.reaproveitada) return {};
-  return { ultimaCaptura: { imagemId: captura.imagemId, em: captura.em, url: captura.url ?? null, largura: captura.largura, altura: captura.altura } };
+  return { ultimaCaptura: { imagemId: captura.imagemId, em: captura.em, url: captura.url ?? null, largura: captura.largura, altura: captura.altura, abaId: abaId ?? null } };
 }
 
 /** Reduz uma entrada já com captura, aplica, persiste e atualiza o badge. @returns {Promise<string|null>} passoId */
-async function reduzirEPersistir(s, entrada, captura) {
+async function reduzirEPersistir(s, entrada, captura, abaId) {
   const { estado: redutor, acoes } = reduzir(s.redutor, entrada, OPCOES_REDUTOR);
   // criadoEm = instante do evento na página (não o da persistência): é o que ordena os passos
   const criadoEm = new Date(Number.isFinite(entrada.em) ? entrada.em : Date.now()).toISOString();
   for (const a of acoes) if (a.tipo === 'criar') a.passo.criadoEm = criadoEm;
   const r = await aplicarAcoes(s.guiaId, acoes);
-  const patch = { redutor, contador: redutor.contador, ...patchDeCaptura(captura) };
+  const patch = { redutor, contador: redutor.contador, ...patchDeCaptura(captura, abaId) };
   if (r.passoId) patch.ultimoPassoId = r.passoId;
   if (entrada.tipo === 'NAVEGACAO_CAPTURADA') patch.navegacaoPendente = null;
   const novo = await gravarEstado(patch);
@@ -202,9 +207,10 @@ async function reduzirEPersistir(s, entrada, captura) {
 /** @returns {Promise<{ok:boolean, passoId?:string|null, ignorado?:boolean, duplicado?:boolean, erro?:string}>} responde só depois de persistir */
 export function processarEvento(tipo, mensagem, sender) {
   return enfileirar(async () => {
-    const s = await lerEstado();
+    let s = await lerEstado();
     if (!s) return { ok: false, erro: ERRO_SEM_GRAVACAO };
-    const abaId = sender?.tab?.id;
+    const aba = sender?.tab;
+    const abaId = aba?.id;
     if (!s.abas.includes(abaId)) return { ok: false, erro: 'Aba fora da gravação' };
     if (s.status === 'pausado') return { ok: true, ignorado: true };
 
@@ -216,29 +222,83 @@ export function processarEvento(tipo, mensagem, sender) {
       return { ok: true, passoId: s.ultimoPassoId ?? null, duplicado: true };
     }
 
+    // O remetente é a verdade sobre a aba/janela em uso: ao voltar a uma janela cuja aba da gravação já
+    // estava ativa, tabs.onActivated não dispara e s.abaId/s.janelaId apontariam para a outra janela.
+    const visivel = aba.active === true;
+    if (visivel && (abaId !== s.abaId || aba.windowId !== s.janelaId)) s = await gravarEstado({ abaId, janelaId: aba.windowId });
+    // navegação desta aba ainda sem foto (página interativa antes do `load`): fotografa antes do evento,
+    // com o instante do onCommitted — o evento pode então compartilhar essa foto
+    if (visivel && s.navegacaoPendente?.abaId === abaId) {
+      await capturarPendente(abaId);
+      s = await lerEstado();
+    }
+
     const url = mensagem?.url ?? s.redutor?.urlAtual ?? null;
     const fonte = FONTE_POR_TIPO[tipo];
-    const captura = fonte ? await capturar(s.janelaId, url, em, fonte, s) : null;
+    let captura = null;
+    if (fonte && !visivel) {
+      captura = capturaFaltante(MOTIVO_ABA_OCULTA, fonte, em, url);
+    } else if (fonte && tipo === 'DIGITACAO' && mensagem?.confirmadoPor === 'navegacao') {
+      // a página já descarregou: só a última foto da mesma aba e URL serve (sem janela de 500 ms)
+      captura = reaproveitarUltima(s, abaId, url) ?? capturaFaltante(MOTIVO_DESCARREGADA, fonte, em, url);
+    } else if (fonte) {
+      // na digitação `em` é a última tecla (é o que ordena o passo); a foto de confirmação é a de agora
+      const referencia = tipo === 'DIGITACAO' ? Date.now() : em;
+      captura = await capturar(aba.windowId, url, referencia, fonte, s, { abaId });
+    }
     const msg = { ...mensagem, abaId, frameId: sender.frameId ?? 0, frameUrl: sender.frameId ? sender.url ?? null : null };
-    const passoId = await reduzirEPersistir(s, { tipo, mensagem: msg, captura, em }, captura);
+    const passoId = await reduzirEPersistir(s, { tipo, mensagem: msg, captura, em }, captura, abaId);
     return { ok: true, passoId };
   });
 }
 
 /**
- * Passo `navegar` (fonte 'navegacao') da aba ativa: esconde a barra, fotografa, reduz NAVEGACAO_CAPTURADA.
+ * Passo `navegar` (fonte 'navegacao') de uma aba da gravação: esconde a barra, fotografa, reduz NAVEGACAO_CAPTURADA.
+ * `em` é o instante do onCommitted (ordena o passo antes de cliques feitos antes do `load`); a foto é de agora.
+ * Aba não visível → passo com captura faltante (captureVisibleTab fotografaria a aba ativa, que é outra).
  * Deve rodar dentro da fila. @returns {Promise<string|null>} passoId
  */
-export async function capturarNavegacaoAgora(abaId, url, transicao) {
+export async function capturarNavegacaoAgora(abaId, url, transicao, em = Date.now()) {
   const s = await lerEstado();
-  if (!s || s.status === 'pausado' || abaId !== s.abaId) return null;
-  const em = Date.now();
-  await ocultarBarra(abaId);
+  if (!s || s.status === 'pausado' || !s.abas.includes(abaId)) return null;
+  const aba = await chrome.tabs.get(abaId).catch(() => null);
+  if (!aba) return null;
+  const visivel = aba.active === true;
+  const agora = Date.now();
+  if (visivel) await ocultarBarra(abaId);
   const info = await infoDaPagina(abaId);
-  const captura = await capturar(s.janelaId, url, em, 'navegacao', s);
-  await mostrarBarra(abaId);
-  const mensagem = { url, tituloPagina: info?.tituloPagina ?? '', abaId, viewport: info?.viewport ?? null, dpr: info?.dpr ?? null };
-  return reduzirEPersistir(s, { tipo: 'NAVEGACAO_CAPTURADA', url, transicao, captura, mensagem, em }, captura);
+  const captura = visivel
+    ? await capturar(aba.windowId, url, agora, 'navegacao', s, { abaId })
+    : capturaFaltante(MOTIVO_ABA_OCULTA, 'navegacao', agora, url);
+  if (visivel) await mostrarBarra(abaId);
+  const mensagem = { url, tituloPagina: info?.tituloPagina ?? aba.title ?? '', abaId, viewport: info?.viewport ?? null, dpr: info?.dpr ?? null };
+  return reduzirEPersistir(s, { tipo: 'NAVEGACAO_CAPTURADA', url, transicao, captura, mensagem, em }, captura, abaId);
+}
+
+/** A pendência ainda é o documento atual do frame de topo? (documentId quando o Chrome informa; senão a URL.) */
+async function pendenciaAtual(p) {
+  const quadro = await chrome.webNavigation.getFrame({ tabId: p.abaId, frameId: 0 }).catch(() => null);
+  if (!quadro) return false;
+  if (p.documentId && quadro.documentId) return quadro.documentId === p.documentId;
+  return (quadro.url ?? null) === p.url;
+}
+
+/**
+ * Fotografa a navegação pendente da aba (`navegacaoPendente`, gravada em processarNavegacao). Pendência de um
+ * documento já substituído é descartada sem foto; aba em segundo plano fica pendente até voltar a ser visível
+ * (tabs.onActivated agenda a foto). Deve rodar dentro da fila. @returns {Promise<string|null>} passoId
+ */
+export async function capturarPendente(abaId) {
+  const s = await lerEstado();
+  const p = s?.navegacaoPendente;
+  if (!p || p.abaId !== abaId) return null;
+  const aba = await chrome.tabs.get(abaId).catch(() => null);
+  if (!aba || !(await pendenciaAtual(p))) {
+    await gravarEstado({ navegacaoPendente: null });
+    return null;
+  }
+  if (aba.active !== true) return null;
+  return capturarNavegacaoAgora(abaId, p.url, p.transicao, p.em); // limpa navegacaoPendente ao persistir
 }
 
 // ---------------------------------------------------------------------------
@@ -273,9 +333,9 @@ export function iniciar(abaId) {
     }
     await atualizarBadge(estado);
     chrome.alarms.create(ALARME, { periodInMinutes: 1 });
-    // passo inicial "Navegue para …": a página assenta antes da foto
+    // passo inicial "Navegue para …": a página assenta antes da foto; criadoEm = início (nenhum evento é anterior)
     await esperar(ESPERA_PASSO_INICIAL);
-    await capturarNavegacaoAgora(abaId, url, 'inicio');
+    await capturarNavegacaoAgora(abaId, url, 'inicio', estado.iniciadoEm);
     return { ok: true, guiaId: guia.id };
   });
 }

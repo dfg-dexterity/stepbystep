@@ -109,6 +109,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
   // MARK: NSMenuDelegate
 
   func menuWillOpen(_ menu: NSMenu) {
+    // Só parado: a gravação em curso também está "gravando" no guide.json e não pode ser recuperada por cima
+    // dela (o Gravador ainda recusa pelo fluxo se o estado mudar entre abrir o menu e escolher).
+    guard estado == .parado else {
+      itemRecuperar.isHidden = true
+      return
+    }
     let interrompidas: [URL] = Persistencia.gravacoesInterrompidas()
     itemRecuperar.isHidden = interrompidas.isEmpty
     guard let submenu = itemRecuperar.submenu else { return }

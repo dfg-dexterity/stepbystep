@@ -1,12 +1,14 @@
 // Diálogo Notion (seção 8.1): token com Testar, busca da página-mãe com debounce,
 // Publicar com progresso, Retomar/Criar nova página. Escopo: só criar a página nova.
+// Fechar o diálogo durante a publicação pede confirmação e aborta os fetch; o registro da página criada
+// vai para o guia aberto (procurado pelo id) ou direto para o banco, se o usuário já saiu do editor.
 import { criarClienteNotion } from '../core/notion-cliente.js';
-import { obterConfig, salvarConfig } from '../core/armazenamento.js';
+import { obterConfig, salvarConfig, carregarGuia as lerGuiaDoBanco, salvarGuia } from '../core/armazenamento.js';
 import { assarPasso } from '../core/render-canvas.js';
 import { obterBitmap } from './canvas-anotacao.js';
 import { estado, temImagem } from './estado.js';
-import { marcarAlterado, salvarAgora } from './historico.js';
-import { abrirDialogo } from './componentes/dialogo.js';
+import { marcarAlterado, salvarAgora, definirVersaoGravada } from './historico.js';
+import { abrirDialogo, confirmar } from './componentes/dialogo.js';
 import { avisar } from './componentes/aviso.js';
 
 const URL_INTEGRACOES = 'https://www.notion.so/profile/integrations';
@@ -116,16 +118,33 @@ export async function abrirNotion(cfg) {
   resultado.setAttribute('aria-live', 'polite');
   secPub.append(linhaPub, progresso, resultado);
 
-  raiz.append(secToken, secPai, secPub);
-  const dialogo = abrirDialogo({ titulo: 'Publicar no Notion', conteudo: raiz, botoes: [{ rotulo: 'Fechar', valor: null }], largura: 620, classe: 'dialogo--notion' });
-
   // ---- estado
   let paiId = null;
   let paiTitulo = '';
   let publicando = false;
+  let controlador = null; // AbortController da publicação em curso: cancelar = abortar os fetch
   let publicacaoPendente = guia.publicacoes?.find((p) => p.destino === 'notion' && p.paginaId && !p.concluida) ?? null;
 
-  const cliente = () => criarClienteNotion({ token: token.value.trim(), base: cfg.baseNotion, fetch: (...args) => fetch(...args) });
+  raiz.append(secToken, secPai, secPub);
+  const dialogo = abrirDialogo({
+    titulo: 'Publicar no Notion',
+    conteudo: raiz,
+    botoes: [{ rotulo: 'Fechar', valor: null }],
+    largura: 620,
+    classe: 'dialogo--notion',
+    // Esc, ×, clique fora ou «Fechar» no meio da publicação: confirma antes de abortar
+    antesDeFechar: async () => {
+      if (!publicando) return true;
+      const cancelar = await confirmar('A publicação ainda está em andamento. Cancelar agora? Se a página já tiver sido criada no Notion, ela poderá ser retomada depois.', {
+        titulo: 'Publicação em andamento', ok: 'Cancelar publicação', cancelar: 'Continuar publicando', perigo: true,
+      });
+      if (cancelar) controlador?.abort();
+      return cancelar;
+    },
+  });
+
+  // todo fetch da publicação leva o sinal do cancelamento (fora dela `controlador` é null e o sinal, undefined)
+  const cliente = () => criarClienteNotion({ token: token.value.trim(), base: cfg.baseNotion, fetch: (url, init) => fetch(url, { ...init, signal: controlador?.signal }) });
   const definirEstado = (elemento, texto, tipo = '') => { elemento.textContent = texto; elemento.className = `notion-estado${tipo ? ` notion-estado--${tipo}` : ''}`; };
 
   function mostrarPai() {
@@ -262,18 +281,44 @@ export async function abrirNotion(cfg) {
     preenchido.style.width = `${Math.min(100, Math.round(pct))}%`;
     textoProgresso.textContent = texto;
   }
-  function registrarPublicacao(publicacao) {
-    guia.publicacoes ??= [];
-    const i = guia.publicacoes.findIndex((p) => p.destino === 'notion' && p.paginaId && p.paginaId === publicacao.paginaId);
-    if (i >= 0) guia.publicacoes[i] = publicacao;
-    else guia.publicacoes.push(publicacao);
-    marcarAlterado();
+  /** Lista com a publicação mesclada: substitui a entrada da mesma página; uma página nova encerra a pendência antiga. */
+  function mesclarPublicacao(lista, publicacao) {
+    const atual = Array.isArray(lista) ? lista : [];
+    const i = atual.findIndex((p) => p.destino === 'notion' && p.paginaId && p.paginaId === publicacao.paginaId);
+    if (i >= 0) return atual.map((p, k) => (k === i ? publicacao : p));
+    return [...atual.filter((p) => !(p.destino === 'notion' && !p.concluida)), publicacao];
+  }
+  /**
+   * Registra no guia aberto (procurado pelo id: desfazer/refazer troca o objeto) ou, se o usuário já saiu dele,
+   * direto no banco — a página existe no Notion e sem `paginaId` gravado não haveria como retomar.
+   */
+  async function registrarPublicacao(publicacao) {
+    const aberto = estado.guia?.id === guia.id ? estado.guia : null;
+    if (aberto) {
+      aberto.publicacoes = mesclarPublicacao(aberto.publicacoes, publicacao);
+      marcarAlterado();
+      return;
+    }
+    try {
+      const noBanco = await lerGuiaDoBanco(guia.id);
+      if (!noBanco) return;
+      if (estado.guia?.id === guia.id) { await registrarPublicacao(publicacao); return; }   // reaberto enquanto líamos
+      noBanco.publicacoes = mesclarPublicacao(noBanco.publicacoes, publicacao);
+      const gravado = await salvarGuia(noBanco);
+      // reaberto entre a leitura e a gravação: a cópia em memória recebe o registro e passa a valer a versão gravada
+      if (estado.guia?.id === guia.id) { estado.guia.publicacoes = noBanco.publicacoes; definirVersaoGravada(gravado.atualizadoEm); }
+    } catch (e) {
+      console.warn('Registro da publicação não gravado', e);
+      avisar('A página foi criada no Notion, mas o registro não pôde ser gravado no guia.', { tipo: 'atencao' });
+    }
   }
   async function publicar(publicacaoAnterior) {
     const t = token.value.trim();
     if (!t) { definirEstado(estadoToken, 'Cole o token da integração interna.', 'erro'); token.focus(); return; }
     if (!paiId) { definirEstado(estadoPai, 'Escolha a página-mãe antes de publicar.', 'erro'); busca.focus(); return; }
     publicando = true;
+    controlador = new AbortController();
+    const sinal = controlador.signal;
     btnPublicar.disabled = btnRetomar.disabled = btnNova.disabled = btnTestar.disabled = true;
     progresso.hidden = false;
     preenchido.style.width = '0%';
@@ -283,7 +328,7 @@ export async function abrirNotion(cfg) {
     await salvarAgora();
     try {
       const r = await cliente().publicarGuia(guia, { paiId, obterImagemAssada, aoProgredir, publicacaoAnterior: publicacaoAnterior ?? undefined });
-      registrarPublicacao(r.publicacao);
+      await registrarPublicacao(r.publicacao);
       publicacaoPendente = null;
       preenchido.style.width = '100%';
       textoProgresso.textContent = 'Concluído';
@@ -298,12 +343,20 @@ export async function abrirNotion(cfg) {
       resultado.append(link);
       avisar('Manual publicado no Notion.', { tipo: 'sucesso' });
     } catch (e) {
-      console.error('Falha na publicação', e);
+      const cancelada = sinal.aborted;
+      if (!cancelada) console.error('Falha na publicação', e);
       const parcial = e?.publicacao;
-      if (parcial?.paginaId) { publicacaoPendente = { ...parcial, concluida: false }; registrarPublicacao(publicacaoPendente); }
-      definirEstado(resultado, `${e?.message || 'Falha ao publicar.'}${parcial?.paginaId ? ' A página já foi criada: você pode retomar sem repetir o que foi enviado.' : ''}`, 'erro');
+      if (parcial?.paginaId) { publicacaoPendente = { ...parcial, concluida: false }; await registrarPublicacao(publicacaoPendente); }
+      if (cancelada) {
+        const retomavel = !!parcial?.paginaId;
+        definirEstado(resultado, retomavel ? 'Publicação cancelada. A página já criada pode ser retomada.' : 'Publicação cancelada.', 'atencao');
+        avisar(retomavel ? 'Publicação no Notion cancelada. Abra o Notion de novo para retomar a página já criada.' : 'Publicação no Notion cancelada.', { tipo: 'atencao' });
+      } else {
+        definirEstado(resultado, `${e?.message || 'Falha ao publicar.'}${parcial?.paginaId ? ' A página já foi criada: você pode retomar sem repetir o que foi enviado.' : ''}`, 'erro');
+      }
     } finally {
       publicando = false;
+      controlador = null;
       btnPublicar.disabled = btnRetomar.disabled = btnNova.disabled = btnTestar.disabled = false;
       mostrarRetomada();
       mostrarPai();

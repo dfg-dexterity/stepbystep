@@ -52,12 +52,14 @@ async function fecharTela() {
   if (t.tipo === 'editor') {
     await historico.salvarAgora();
     const guia = estado.guia;
+    // com o banco mais novo que esta cópia, a lista de imagens usadas está desatualizada: não apagar nada
+    const limparOrfas = !!guia && !historico.emConflito();
     t.destruir();
     limparBitmaps();
     fecharGuia();
     historico.limpar();
     document.body.classList.remove('modo-editor');
-    if (guia) excluirImagensOrfas(guia).catch((e) => console.warn('Limpeza de imagens órfãs falhou', e));
+    if (limparOrfas) excluirImagensOrfas(guia).catch((e) => console.warn('Limpeza de imagens órfãs falhou', e));
   } else {
     t.destruir();
   }
@@ -86,11 +88,19 @@ async function abrirEditor(id) {
     location.hash = '#/';
     return;
   }
+  if (guia.estado === 'gravando') {
+    // o gravador (service worker da extensão) ainda insere passos neste guia: o autosave do editor gravaria
+    // por cima da cópia em memória e apagaria o que chegou depois da abertura
+    avisar('Este guia está sendo gravado. Pare a gravação na extensão para editá-lo.', { tipo: 'atencao', duracao: 8000 });
+    location.hash = '#/';
+    return;
+  }
   const raiz = clonarTemplate('tpl-editor');
   app.replaceChildren(raiz);
   document.body.classList.add('modo-editor');
   document.getElementById('nav-biblioteca')?.removeAttribute('aria-current');
   historico.limpar();
+  historico.definirVersaoGravada(guia.atualizadoEm);
   carregarGuia(guia);
   salvarConfig('editor.ultimoGuia', id).catch(() => {});
   const partes = ligarEditor(raiz);
@@ -107,7 +117,7 @@ function ligarEditor(raiz) {
   const contagem = raiz.querySelector('#lista-contagem');
 
   const canvas = montarCanvas(raiz.querySelector('#canvas-wrap'), {
-    aoAnexar: (arquivo) => { const p = passoAtual(); if (p) anexarImagemAoPasso(p.id, arquivo); },
+    aoAnexar: (arquivo) => { const p = passoAtual(); if (p) anexarImagemAoPasso(p.id, arquivo).catch(erro); },
   });
   const ferramentas = ligarFerramentas(canvas);
   const lista = montarListaPassos(raiz.querySelector('#lista-passos'));
@@ -120,6 +130,7 @@ function ligarEditor(raiz) {
     const g = estado.guia;
     if (!g) return;
     if (document.activeElement !== tituloGuia && tituloGuia.value !== g.titulo) tituloGuia.value = g.titulo;
+    tituloGuia.title = g.titulo;   // em telas estreitas o campo mostra reticências; o título inteiro fica na dica
     const n = g.passos.length;
     const semImagem = g.passos.filter((p) => p.captura?.faltante).length;
     resumo.textContent = `${n} ${n === 1 ? 'passo' : 'passos'}${semImagem ? ` · ${semImagem} sem imagem` : ''}`;
@@ -262,9 +273,15 @@ function ligarRodape(raiz, cancelamentos) {
   cancelamentos.push(on('mudou', ({ motivo }) => { if (motivo === 'guia') atualizarHistorico(); }));
   cancelamentos.push(on('salvamento', ({ estado: s, em }) => {
     const hora = em ? new Date(em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-    estadoSalvamento.textContent = s === 'salvando' ? 'Salvando…' : s === 'salvo' ? `Salvo ${hora}` : s === 'erro' ? 'Erro ao salvar' : 'Alterações pendentes';
-    estadoSalvamento.classList.toggle('rodape-estado--erro', s === 'erro');
+    const textos = { salvando: 'Salvando…', salvo: `Salvo ${hora}`, erro: 'Erro ao salvar', conflito: 'Alterado em outra aba — recarregue' };
+    estadoSalvamento.textContent = textos[s] ?? 'Alterações pendentes';
+    estadoSalvamento.classList.toggle('rodape-estado--erro', s === 'erro' || s === 'conflito');
     if (s === 'erro') avisar('Não foi possível gravar o guia no navegador. Exporte um .stepbystep.zip para não perder o trabalho.', { tipo: 'erro' });
+    if (s === 'conflito') {
+      avisar('Este guia foi alterado em outra aba (ou pela gravação). As edições feitas aqui não serão gravadas: recarregue para continuar da versão mais nova.', {
+        tipo: 'erro', duracao: 0, acao: { rotulo: 'Recarregar', executar: () => location.reload() },
+      });
+    }
     if (s === 'salvo') atualizarArmazenamento(armazenamento);
   }));
   atualizarHistorico();
@@ -302,28 +319,47 @@ function dialogoMarkdown(executar) {
 }
 
 const ESTREITO = window.matchMedia('(max-width: 900px)');
-function ativarAba(raiz, nome, { soSeEstreito = false } = {}) {
+function ativarAba(raiz, nome, { soSeEstreito = false, focar = false } = {}) {
   if (soSeEstreito && !ESTREITO.matches) return;
-  for (const b of raiz.querySelectorAll('.editor-abas button')) {
+  for (const b of raiz.querySelectorAll('.editor-abas [role="tab"]')) {
     const ativa = b.dataset.aba === nome;
     b.classList.toggle('is-ativa', ativa);
-    b.setAttribute('aria-pressed', String(ativa));
+    b.setAttribute('aria-selected', String(ativa));
+    b.tabIndex = ativa ? 0 : -1;   // tabindex itinerante: Tab entra na lista de abas uma vez; ←/→ trocam de aba
+    if (ativa && focar) b.focus();
   }
   for (const c of raiz.querySelectorAll('.editor-col')) c.classList.toggle('is-ativa', c.dataset.col === nome);
 }
 function ligarAbas(raiz) {
-  for (const b of raiz.querySelectorAll('.editor-abas button')) b.addEventListener('click', () => ativarAba(raiz, b.dataset.aba));
+  const abas = [...raiz.querySelectorAll('.editor-abas [role="tab"]')];
+  abas.forEach((b, i) => {
+    b.addEventListener('click', () => ativarAba(raiz, b.dataset.aba));
+    b.addEventListener('keydown', (e) => {
+      const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!delta) return;
+      e.preventDefault();
+      ativarAba(raiz, abas[(i + delta + abas.length) % abas.length].dataset.aba, { focar: true });
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Roteador
 // ---------------------------------------------------------------------------
-async function rotear() {
-  const hash = location.hash || '#/';
+let navegacao = Promise.resolve();
+
+async function executarRota() {
+  const hash = location.hash || '#/';   // lido na hora de executar: dois hashchange seguidos vão direto ao último
   const m = hash.match(/^#\/guia\/([^/?#]+)/);
   if (m) return abrirEditor(decodeURIComponent(m[1]));
   if (/^#\/importar/.test(hash)) return abrirBiblioteca({ importar: true });
   return abrirBiblioteca();
+}
+
+/** Uma navegação por vez: fechar o editor espera o salvamento, e um hashchange nesse meio tempo montaria uma segunda tela. */
+function rotear() {
+  navegacao = navegacao.then(executarRota).catch(erro);
+  return navegacao;
 }
 
 async function iniciar() {
@@ -334,7 +370,7 @@ async function iniciar() {
     const base = await obterConfig('notion.base');
     if (typeof base === 'string' && base) baseNotion = base;
   } catch (e) { console.warn('Config indisponível', e); }
-  window.addEventListener('hashchange', () => { rotear().catch(erro); });
+  window.addEventListener('hashchange', () => { rotear(); });
   await rotear();
 }
 

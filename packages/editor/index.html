@@ -67,27 +67,28 @@
       <span id="editor-resumo" class="dxt-badge editor-resumo"></span>
     </header>
 
-    <nav class="editor-abas" aria-label="Painéis do editor">
-      <button type="button" data-aba="passos" class="is-ativa" aria-pressed="true">Passos</button>
-      <button type="button" data-aba="imagem" aria-pressed="false">Imagem</button>
-      <button type="button" data-aba="detalhes" aria-pressed="false">Detalhes</button>
-    </nav>
+    <!-- até 900 px as colunas viram abas (tablist/tab/tabpanel); acima disso a lista de abas fica oculta -->
+    <div class="editor-abas" role="tablist" aria-label="Painéis do editor">
+      <button type="button" role="tab" id="aba-passos" data-aba="passos" class="is-ativa" aria-selected="true" aria-controls="col-passos">Passos</button>
+      <button type="button" role="tab" id="aba-imagem" data-aba="imagem" aria-selected="false" aria-controls="col-imagem" tabindex="-1">Imagem</button>
+      <button type="button" role="tab" id="aba-detalhes" data-aba="detalhes" aria-selected="false" aria-controls="col-detalhes" tabindex="-1">Detalhes</button>
+    </div>
 
-    <aside class="editor-col editor-col--passos is-ativa" data-col="passos" aria-label="Passos">
+    <aside class="editor-col editor-col--passos is-ativa" id="col-passos" data-col="passos" role="tabpanel" aria-labelledby="aba-passos">
       <div class="editor-col-cabecalho">
         <h2>Passos</h2>
         <span id="lista-contagem" class="dxt-badge"></span>
         <button type="button" id="btn-novo-passo" class="dxt-btn dxt-btn--ghost dxt-btn--sm" title="Inserir passo manual depois do passo atual">+ Passo</button>
       </div>
-      <div id="lista-passos" class="editor-col-corpo" role="listbox" aria-label="Lista de passos"></div>
+      <div id="lista-passos" class="editor-col-corpo"></div>
     </aside>
 
-    <section class="editor-col editor-col--imagem" data-col="imagem" aria-label="Imagem do passo">
+    <section class="editor-col editor-col--imagem" id="col-imagem" data-col="imagem" role="tabpanel" aria-labelledby="aba-imagem">
       <div id="ferramentas" class="ferramentas"></div>
       <div id="canvas-wrap" class="editor-col-corpo"></div>
     </section>
 
-    <aside class="editor-col editor-col--detalhes" data-col="detalhes" aria-label="Detalhes do passo">
+    <aside class="editor-col editor-col--detalhes" id="col-detalhes" data-col="detalhes" role="tabpanel" aria-labelledby="aba-detalhes">
       <div class="editor-col-cabecalho">
         <h2>Detalhes</h2>
       </div>
