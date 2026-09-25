@@ -25,7 +25,7 @@ StepByStep grava processos passo a passo (no navegador, via extensão Chrome MV3
 | D11 | **Undo/redo por snapshots** (`structuredClone` do guia sem imagens), com coalescência de edições de texto | Menos código e sem risco de inverso errado. |
 | D12 | Mac: **macOS 14+**, tap `.listenOnly`, `SCScreenshotManager.captureImage` do **display inteiro** sob o cursor + `recorte` automático pela janela; AX + `AXManualAccessibility` + OCR (Vision) como fallback; `.app` assinado com **certificado autoassinado estável** | Menus/popovers/sheets aparecem na foto; TCC não esquece as permissões a cada build; código Swift escrito sem compilador aqui é validado por job `macos-latest` no CI. |
 | D13 | Mac grava `titulo: ""` + `tituloAuto: true`; **o editor gera as frases** | Zero duplicação de regras em Swift. |
-| D14 | Notion: File Upload API (`/v1/file_uploads` + `/send` multipart, bloco `image` `file_upload`), `Notion-Version: 2022-06-28` fixa, publicação **retomável**; da extensão chama direto (`host_permissions`); do editor hospedado, via `api/notion/[...rota].js` (assinatura Web, corpo repassado byte a byte, CORS restrito à origem do editor) | A API não aceita CORS de navegador; o token é sempre do usuário e nunca fica no servidor. |
+| D14 | Notion: File Upload API (`/v1/file_uploads` + `/send` multipart, bloco `image` `file_upload`), `Notion-Version: 2022-06-28` fixa, publicação **retomável**; da extensão chama direto (`host_permissions`); do editor hospedado, via `api/notion.js` (assinatura Web, corpo repassado byte a byte, CORS restrito à origem do editor) | A API não aceita CORS de navegador; o token é sempre do usuário e nunca fica no servidor. |
 | D15 | Testes: `node --test` para núcleo/API; Playwright 1.56 (`launchPersistentContext` + `channel: 'chromium'` headless novo + `--load-extension`) para extensão e editor | Tudo verificável em Linux, exceto Swift (CI macOS + roteiro manual). |
 
 Fora da v1: Safari (conversor depois; o manifest evita APIs exclusivas do Chrome), Firefox, update incremental de página no Notion, OAuth público do Notion, servidor local/Native Messaging para o Mac.
@@ -123,7 +123,7 @@ stepbystep/
 │       ├── Makefile                      # build, test, app, run
 │       └── README.md                     # toolchain, certificado "StepByStep Dev", permissões, roteiro de teste manual
 ├── api/
-│   ├── notion/[...rota].js               # proxy allow-list para api.notion.com (assinatura Web Request/Response)
+│   ├── notion.js                         # proxy allow-list para api.notion.com (assinatura Web; /api/notion/* chega via rewrite)
 │   └── hash.js                           # SHA-256 dos arquivos servidos (padrão da casa; allow-list /editor/* e /core/*)
 ├── scripts/
 │   ├── dev-server.mjs                    # :8080 — estático com os mesmos rewrites da Vercel + /api/notion (Web) + /api/hash (Node) + NOTION_BASE
@@ -1057,7 +1057,7 @@ PATCH /v1/blocks/<page_id>/children
 - Rate limit ~3 req/s → envios sequenciais; `429` respeita `Retry-After`.
 - Seções (`heading_2`) reiniciam a numeração da lista no Notion; por isso, quando o guia tem seções, os itens recebem prefixo "Passo n — ".
 
-### 8.4 Proxy `api/notion/[...rota].js` (só para o editor hospedado)
+### 8.4 Proxy `api/notion.js` (só para o editor hospedado)
 
 ```js
 // Assinatura Web (Request → Response): o corpo chega como stream e é repassado byte a byte (multipart intacto).
@@ -1223,3 +1223,4 @@ o texto das seções originais foi mantido para preservar o histórico das decis
 | 4.3 | `abreviarUrl` remove `usuario:senha@` da URL. | Credenciais entravam no título do passo. |
 | 4.11 | Falha de rede no `fetch` → uma retentativa (exceto `POST /v1/pages`) e `ErroNotion(0)` em pt-BR; `AbortError` sobe intacto; resposta 2xx sem `id` vira `ErroNotion` em vez de `TypeError`. | Mensagem em inglês («Failed to fetch») e exceções cruas no diálogo. |
 | 5.3 | Estado da gravação ganhou `plataforma` (`'mac'` \| `'outro'`, derivada do userAgent ao iniciar) usada nas opções do redutor. | `plataforma: 'outro'` fixa fazia ⌘S virar «Win+S» na gravação. |
+| 2 / 8.4 | O proxy é `api/notion.js` (não `api/notion/[...rota].js`) e o `vercel.json` reescreve `/api/notion/:caminho*` → `/api/notion?rota=/:caminho*`; o handler aceita o caminho original ou o parâmetro `rota`, sempre pela allow-list. | Catch-all `[...x].js` é recurso do Next.js: em funções soltas a Vercel não cria a rota e o primeiro deploy respondeu 404 em `/api/notion/*`. |

@@ -6,6 +6,7 @@
     { "source": "/editor", "destination": "/editor/", "permanent": false }
   ],
   "rewrites": [
+    { "source": "/api/notion/:caminho*", "destination": "/api/notion?rota=/:caminho*" },
     { "source": "/editor/", "destination": "/packages/editor/index.html" },
     { "source": "/editor/:caminho*", "destination": "/packages/editor/:caminho*" },
     { "source": "/core/:caminho*", "destination": "/packages/core/:caminho*" }

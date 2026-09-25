@@ -23,7 +23,7 @@ tudo no **editor** (reordenar, mesclar, recortar, desfocar dados sensíveis, set
 | Extensão Chrome MV3 | `packages/extensao/` | Captura no navegador: barra flutuante, sensor de eventos, service worker, popup. Carrega `core/` e `editor/` copiados por `npm run sincronizar`. |
 | Editor web | `packages/editor/` | Biblioteca de guias e editor (sem build). Hospedado em <https://stepbystep-dexterity.vercel.app/editor/> e embutido na extensão. |
 | App Mac | `packages/mac/` | Menu bar em Swift (macOS 14+): captura o display inteiro, lê Acessibilidade/OCR e grava uma pasta que o editor importa. |
-| API | `api/` | `notion/[...rota].js` (proxy allow-list para a API do Notion, usado só pelo editor hospedado) e `hash.js` (integridade da publicação). |
+| API | `api/` | `notion.js` (proxy allow-list para a API do Notion, usado só pelo editor hospedado) e `hash.js` (integridade da publicação). |
 
 Um único formato de guia (`guide.json` v1 + PNGs originais) atravessa tudo: extensão, Mac, inserção manual e
 editor. Todas as coordenadas são em pixels da imagem original; anotações são não destrutivas (o original é
@@ -139,7 +139,7 @@ requisição, `rich_text` ≤ 2000 caracteres), `Notion-Version: 2022-06-28` fix
 
 - Na **extensão** o editor chama `https://api.notion.com` direto (`host_permissions`).
 - No editor **hospedado** o navegador não pode chamar a API do Notion (CORS), então as chamadas passam por
-  `api/notion/[...rota].js` (assinatura Web, exportada só como `GET`/`POST`/`PATCH`/`OPTIONS` — com um
+  `api/notion.js` (assinatura Web, exportada só como `GET`/`POST`/`PATCH`/`OPTIONS` — com um
   `export default` o builder da Vercel trataria o handler como `(req, res)` do Node): allow-list de rotas e
   métodos, corpo repassado byte a byte (multipart intacto),
   só `authorization`, `notion-version` e `content-type` seguem adiante, CORS restrito às origens do editor,
@@ -205,7 +205,7 @@ packages/core/          núcleo — ES modules puros (modelo, frases, coordenada
 packages/editor/        editor web sem build (index.html, app.js, módulos, dexterity.css idêntico aos demais apps Dexterity)
 packages/extensao/      extensão Chrome MV3 (manifest, sw.js, conteúdo, popup; core/ e editor/ gerados por `npm run sincronizar`)
 packages/mac/           app de menu bar em Swift (SwiftPM, macOS 14+)
-api/notion/[...rota].js proxy allow-list para api.notion.com (assinatura Web; só o editor hospedado)
+api/notion.js           proxy allow-list para api.notion.com (assinatura Web; só o editor hospedado)
 api/hash.js             integridade: tamanho e SHA-256 de um arquivo publicado (/editor/* ou /core/*)
 scripts/                dev-server, notion-falso, sincronizar-extensao, empacotar-extensao, gerar-fixtures
 tests/                  core/, extensao/, api/, e2e/, fixtures/ e sincronizacao.test.mjs

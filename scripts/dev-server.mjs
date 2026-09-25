@@ -118,7 +118,7 @@ const importarApi = (...segmentos) => import(pathToFileURL(join(RAIZ, 'api', ...
 
 async function tratarApi(req, res, url, porta) {
   if (url.pathname.startsWith('/api/notion/') || url.pathname === '/api/notion') {
-    const modulo = await importarApi('notion', '[...rota].js');
+    const modulo = await importarApi('notion.js');
     const handler = modulo[req.method?.toUpperCase()];   // exports nomeados por método, como a Vercel despacha
     if (typeof handler !== 'function') return responderTexto(res, 405, 'método não permitido');
     const resposta = await handler(await montarRequest(req, porta));

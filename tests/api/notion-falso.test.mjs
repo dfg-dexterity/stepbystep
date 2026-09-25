@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { iniciarNotionFalso, PAGINAS_INICIAIS, VERSAO_NOTION } from '../../scripts/notion-falso.mjs';
 import { criarClienteNotion } from '../../packages/core/notion-cliente.js';
-import { POST as handler } from '../../api/notion/[...rota].js';
+import { POST as handler } from '../../api/notion.js';
 
 const FIXTURE = new URL('../fixtures/guia-exemplo/', import.meta.url);
 const CAB = { authorization: 'Bearer ntn_falso', 'notion-version': VERSAO_NOTION, 'content-type': 'application/json' };
