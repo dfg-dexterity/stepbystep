@@ -3,6 +3,9 @@
 Manuais passo a passo capturados automaticamente — no navegador (extensão Chrome) e no Mac (app de menu bar) —
 com anotações polidas em português, editor de imagens e publicação no Notion. Dexterity IT Solutions.
 
+**Editor em produção:** https://stepbystep-dexterity.vercel.app (Vercel, time `dexterityit`, projeto
+`stepbystep-dexterity`; cada push na `main` publica em produção).
+
 Arquitetura e contrato entre os pacotes: [`docs/especificacao.md`](docs/especificacao.md).
 Guia do Notion para o usuário: [`docs/notion.md`](docs/notion.md).
 
