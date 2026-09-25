@@ -1,10 +1,12 @@
 // Painel da imagem: <canvas> de visualização (desenharPasso do núcleo) + camada de preview
 // (alças, máscara do recorte) sobreposta, zoom e cache de ImageBitmap por imagemId.
 // Conversão ponteiro → imagem: x = area.x + offsetX / zoom (todas as coordenadas em px da imagem).
+// A área mostrada é a área efetiva do núcleo (recorte manual, senão zoom no alvo, senão a tela inteira) —
+// a mesma que a exportação usa; com a ferramenta de recorte a imagem inteira aparece, com a janela tracejada.
 // O cache é compartilhado com as miniaturas e as exportações; a imagem do passo aberto fica fixada
 // (fora do LRU) e o canvas só redesenha quando algo visível muda.
 import { desenharPasso, medidas } from '../core/render-canvas.js';
-import { separarRecorte, areaSaida, bboxDaAnotacao } from '../core/anotacoes.js';
+import { areaEfetiva, bboxDaAnotacao } from '../core/anotacoes.js';
 import { carregarImagem } from '../core/armazenamento.js';
 import { CORES } from '../core/modelo.js';
 import { estado, on, emitir, passoAtual, anotacaoSelecionada, temImagem, ZOOM_MIN, ZOOM_MAX } from './estado.js';
@@ -152,13 +154,13 @@ export function montarCanvas(wrap, opcoes = {}) {
     return { x: (r.x - area.x) * zoom, y: (r.y - area.y) * zoom, w: r.w * zoom, h: r.h * zoom };
   }
 
-  function desenharPreview(anotacoes, recorte, selecionada, area, zoom, mostrarTudo, passo) {
+  function desenharPreview(anotacoes, janela, selecionada, area, zoom, mostrarTudo, passo) {
     const ctx = preview.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, preview.width, preview.height);
-    if (mostrarTudo && recorte) {
-      // fora do recorte fica escurecido; o contorno tracejado mostra a janela de saída
-      const r = rectTela(recorte, area, zoom);
+    if (mostrarTudo && janela) {
+      // fora da janela de saída (recorte ou zoom no alvo) fica escurecido; o contorno tracejado a mostra
+      const r = rectTela(janela, area, zoom);
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, 0, preview.width, preview.height);
@@ -211,10 +213,12 @@ export function montarCanvas(wrap, opcoes = {}) {
     if (!bmp) { mostrarVazio(passo, 'A imagem deste passo não foi encontrada no armazenamento. Anexe outra.'); return; }
     const imagem = { largura: bmp.width, altura: bmp.height, fonte: bmp };
     const anotacoes = temporario ?? passo.anotacoes;
-    const { recorte } = separarRecorte(anotacoes);
     const selecionada = anotacoes.find((a) => a.id === estado.selecaoAnotacaoId) ?? null;
     const mostrarTudo = estado.ferramenta === 'recorte' || selecionada?.tipo === 'recorte';
-    const area = areaSaida(imagem, mostrarTudo ? null : recorte);
+    const efetiva = areaEfetiva({ ...passo, anotacoes }, imagem, guia.estilo);
+    const inteira = { x: 0, y: 0, w: imagem.largura, h: imagem.altura };
+    const ehInteira = efetiva.x === 0 && efetiva.y === 0 && efetiva.w === inteira.w && efetiva.h === inteira.h;
+    const area = mostrarTudo ? inteira : efetiva;
     areaAtual = area;
     if (modoAjustar) {
       const z = zoomAjustado(area);
@@ -224,7 +228,7 @@ export function montarCanvas(wrap, opcoes = {}) {
     const W = Math.max(1, Math.round(area.w * zoom));
     const H = Math.max(1, Math.round(area.h * zoom));
     // tudo o que entra no desenho (imagem, anotações, seleção, recorte visível, zoom, estilo): igual ao último → nada a fazer
-    const assinatura = [imagemId, zoom, W, H, mostrarTudo, selecionada?.id ?? '', passo.captura.escala ?? '', JSON.stringify(anotacoes), JSON.stringify(guia.estilo ?? null)].join('|');
+    const assinatura = [imagemId, zoom, W, H, mostrarTudo, selecionada?.id ?? '', passo.captura.escala ?? '', `${area.x},${area.y},${area.w},${area.h}`, JSON.stringify(anotacoes), JSON.stringify(guia.estilo ?? null)].join('|');
     if (assinatura === ultimaAssinatura && bmp === bitmapAtual && !palco.hidden) return;
     bitmapAtual = bmp;
     for (const c of [vis, preview]) {
@@ -251,7 +255,7 @@ export function montarCanvas(wrap, opcoes = {}) {
       agendar();
       return;
     }
-    desenharPreview(anotacoes, recorte, selecionada, area, zoom, mostrarTudo, passo);
+    desenharPreview(anotacoes, ehInteira ? null : efetiva, selecionada, area, zoom, mostrarTudo, passo);
     ultimaAssinatura = assinatura;
     palco.dataset.zoom = String(zoom);
     palco.dataset.area = `${area.x},${area.y},${area.w},${area.h}`;

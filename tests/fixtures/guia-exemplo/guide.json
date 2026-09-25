@@ -148,6 +148,13 @@
           "numero": 2,
           "cor": "cerceta"
         }
+      ],
+      "notas": [
+        {
+          "id": "n_m1x4k9zr02n1",
+          "tipo": "dica",
+          "texto": "O botão fica no canto superior direito da lista de parceiros."
+        }
       ]
     },
     {
@@ -367,6 +374,13 @@
           "y": 756,
           "numero": 4,
           "cor": "cerceta"
+        }
+      ],
+      "notas": [
+        {
+          "id": "n_m1x4k9zr05n1",
+          "tipo": "atencao",
+          "texto": "Nunca compartilhe sua senha: o campo sai desfocado no manual."
         }
       ]
     },
@@ -713,7 +727,14 @@
       "alvo": null,
       "captura": null,
       "resultado": null,
-      "anotacoes": []
+      "anotacoes": [],
+      "notas": [
+        {
+          "id": "n_m1x4k9zr11n1",
+          "tipo": "nota",
+          "texto": "Se o e-mail não chegar, confira a caixa de spam."
+        }
+      ]
     }
   ],
   "imagens": {

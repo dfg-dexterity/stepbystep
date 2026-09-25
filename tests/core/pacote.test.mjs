@@ -114,3 +114,18 @@ test('lerPacote rejeita pacote sem guide.json, JSON inválido, guia inválido e 
   // guide.json em profundidade 2 não conta
   assert.throws(() => lerPacote(new Map([['a/b/guide.json', texto('{}')]])), /não encontrado/);
 });
+
+test('notas e zoom fazem round-trip no pacote; notas vazias (em edição) ficam de fora e o guide.json continua válido', async () => {
+  const original = lerFixture('guia-exemplo');
+  const { imagens: _i, ...semImagens } = structuredClone(original);
+  semImagens.estilo = { ...semImagens.estilo, zoom: 'tela' };
+  semImagens.passos[1] = { ...semImagens.passos[1], zoom: 'alvo', notas: [...semImagens.passos[1].notas, { id: 'n_m1x4k9zr02n2', tipo: 'nota', texto: '   ' }] };
+  const zip = await guiaParaPacote(semImagens, obterImagemDoFixture('guia-exemplo'));
+  const { guia } = lerPacote(await lerZip(zip));
+  assert.equal(guia.estilo.zoom, 'tela');
+  assert.equal(guia.passos[1].zoom, 'alvo');
+  assert.deepEqual(guia.passos[1].notas, original.passos[1].notas);
+  assert.deepEqual(guia.passos[3].notas, original.passos[3].notas);
+  assert.equal(validarGuia(guia).ok, true);
+  assert.equal(semImagens.passos[1].notas.length, 2, 'o guia de origem não é alterado');
+});

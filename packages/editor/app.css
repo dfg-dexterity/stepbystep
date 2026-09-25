@@ -391,6 +391,33 @@ textarea.dxt-input { resize: vertical; line-height: 1.45; font-weight: 400; }
 .anotacao-excluir { width: 24px; height: 24px; padding: 0; border: 1px solid transparent; background: none; color: var(--dxt-muted); font-size: 1rem; line-height: 1; }
 .anotacao-excluir:hover { border-color: var(--dxt-vermelho); color: var(--dxt-vermelho); }
 
+/* enquadramento da imagem (zoom no alvo / tela inteira) */
+.campo-zoom { margin: 12px 0 0; }
+.campo-zoom .dxt-select:disabled { opacity: .55; }
+.painel-nota-zoom { font-size: 0.75rem; }
+.campo-zoom.is-recorte .painel-nota-zoom { color: var(--dxt-amarelo); }
+
+/* dicas e alertas: dica = cerceta, atenção = âmbar, nota = roxo (vermelho nunca) */
+.lista-notas { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.nota-item { --nota: var(--dxt-roxo); padding: 8px; border: 1px solid var(--nota); border-left-width: 4px; background: color-mix(in srgb, var(--nota) 8%, transparent); }
+.nota-item--dica { --nota: var(--dxt-cerceta); }
+.nota-item--atencao { --nota: var(--dxt-amarelo); }
+.nota-topo { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.nota-tipo { flex: 1 1 auto; min-width: 0; min-height: 30px; padding-block: 4px; font-size: 0.8125rem; }
+.nota-btn { flex: none; width: 30px; height: 30px; padding: 0; border: 1px solid var(--dxt-line); background: none; color: var(--dxt-muted); font-size: 0.9375rem; line-height: 1; cursor: pointer; }
+.nota-btn:hover:not(:disabled) { border-color: var(--dxt-acc-txt); color: var(--dxt-acc-txt); }
+.nota-btn:disabled { opacity: .35; cursor: default; }
+.nota-btn--remover:hover:not(:disabled) { border-color: var(--dxt-vermelho); color: var(--dxt-vermelho); }
+.nota-texto { width: 100%; resize: vertical; }
+.notas-acoes { display: flex; flex-wrap: wrap; gap: 6px; }
+.nota-add--dica { border-color: var(--dxt-cerceta); }
+.nota-add--atencao { border-color: var(--dxt-amarelo); color: var(--dxt-amarelo); }
+.nota-add--nota { border-color: var(--dxt-roxo); color: #C08FC2; }
+.cartao-notas { display: inline-flex; align-items: center; gap: 3px; }
+.cartao-nota { display: block; width: 8px; height: 8px; background: var(--dxt-roxo); }
+.cartao-nota--dica { background: var(--dxt-cerceta); }
+.cartao-nota--atencao { background: var(--dxt-amarelo); }
+
 /* ------------------------------ diálogos -------------------------------- */
 .dialogo-titulo { font-size: 1.5rem; margin-bottom: 16px; padding-right: 32px; }
 .dialogo-fechar {

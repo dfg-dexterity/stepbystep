@@ -259,6 +259,7 @@ test('grava formulario.html: títulos, sensível, iframe, navegação, imagens e
   const resultados = await paginaExt.evaluate(async ({ passos, estilo }) => {
     const { carregarImagem } = await import(chrome.runtime.getURL('core/armazenamento.js'));
     const { assarPasso } = await import(chrome.runtime.getURL('core/render-canvas.js'));
+    const { areaEfetiva } = await import(chrome.runtime.getURL('core/anotacoes.js'));
     const saida = [];
     for (const passo of passos) {
       const registro = await carregarImagem(passo.captura.imagemId);
@@ -279,12 +280,15 @@ test('grava formulario.html: títulos, sensível, iframe, navegação, imagens e
       ctx2.drawImage(assado, 0, 0);
       const marcador = passo.anotacoes.find((a) => a.tipo === 'marcador');
       const r = 16 * escala;
+      // saída = área efetiva (zoom no alvo por padrão): o marcador é amostrado relativo a ela
+      const area = areaEfetiva(passo, { largura: bitmap.width, altura: bitmap.height }, estilo);
       // diagonais a 0,6·r do centro: dentro do círculo e fora do algarismo branco
       const amostras = [[0.6, 0.6], [-0.6, 0.6], [0.6, -0.6], [-0.6, -0.6]].map(([dx, dy]) => {
-        const d = ctx2.getImageData(Math.round(marcador.x + dx * r), Math.round(marcador.y + dy * r), 1, 1).data;
+        const d = ctx2.getImageData(Math.round(marcador.x - area.x + dx * r), Math.round(marcador.y - area.y + dy * r), 1, 1).data;
         return [d[0], d[1], d[2]];
       });
-      saida.push({ id: passo.id, medida, assado: { largura, altura }, amostras, pixelBarra });
+      const marcadorDentro = marcador.x - r >= area.x && marcador.y - r >= area.y && marcador.x + r <= area.x + area.w && marcador.y + r <= area.y + area.h;
+      saida.push({ id: passo.id, medida, assado: { largura, altura }, area, marcadorDentro, amostras, pixelBarra });
       bitmap.close(); assado.close();
     }
     return saida;
@@ -294,7 +298,10 @@ test('grava formulario.html: títulos, sensível, iframe, navegação, imagens e
     assert.equal(r.erro, undefined, `${passo.titulo}: ${r.erro}`);
     assert.deepEqual({ largura: r.medida.largura, altura: r.medida.altura }, { largura: passo.captura.largura, altura: passo.captura.altura }, `bitmap de ${passo.titulo}`);
     assert.deepEqual(r.medida.registro, { largura: passo.captura.largura, altura: passo.captura.altura });
-    assert.deepEqual(r.assado, { largura: passo.captura.largura, altura: passo.captura.altura }, 'sem recorte, a saída tem o tamanho da imagem');
+    // sem recorte, a saída é a área ampliada ao redor do alvo (zoom no alvo, padrão), dentro da imagem e com o marcador
+    assert.deepEqual(r.assado, { largura: r.area.w, altura: r.area.h }, 'a saída tem o tamanho da área efetiva');
+    assert.ok(r.area.w < passo.captura.largura && r.area.x >= 0 && r.area.y >= 0 && r.area.x + r.area.w <= passo.captura.largura && r.area.y + r.area.h <= passo.captura.altura, `${passo.titulo}: área ${JSON.stringify(r.area)}`);
+    assert.ok(r.marcadorDentro, `${passo.titulo}: marcador fora da área ampliada`);
     for (const px of r.amostras) {
       for (let c = 0; c < 3; c++) assert.ok(proximo(px[c], CERCETA[c], 12), `${passo.titulo}: pixel ${px} no marcador não é cerceta`);
     }

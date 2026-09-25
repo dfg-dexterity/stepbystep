@@ -465,16 +465,17 @@ test('publica no Notion falso: token, busca, uploads multipart, página e regist
   assert.equal(pagina.corpo.properties.title.title[0].text.content, 'Gravação — SAP GUI');
   const filhos = pagina.corpo.children;
   assert.equal(filhos[0].type, 'callout');
-  assert.match(filhos[0].callout.rich_text[0].text.content, /^Manual gerado com StepByStep · Dexterity IT Solutions · 6 passos · \d{2}\/\d{2}\/\d{4}$/);
-  const itens = filhos.filter((b) => b.type === 'numbered_list_item');
+  assert.match(filhos[0].callout.rich_text[0].text.content, /^(.+ · )?6 passos · ≈ \d+ min · \d{2}\/\d{2}\/\d{4}$/);
+  const itens = filhos.filter((b) => b.type === 'heading_3');
   assert.equal(itens.length, 6);
   const idsUpload = new Set(envios.map((r) => r.rota.match(/file_uploads\/([0-9a-f-]+)\/send/)[1]));
-  for (const item of itens) {
-    const imagem = item.numbered_list_item.children.find((c) => c.type === 'image');
+  const imagens = filhos.filter((b) => b.type === 'image');
+  assert.equal(imagens.length, 6);
+  for (const imagem of imagens) {
     assert.equal(imagem.image.type, 'file_upload');
     assert.ok(idsUpload.has(imagem.image.file_upload.id), 'imagem aponta para um upload enviado');
   }
-  assert.deepEqual(itens[2].numbered_list_item.rich_text.map((t) => [t.text.content, !!t.annotations?.bold]), [['Clique em ', false], ['«Executar»', true], [' para abrir a transação', false]]);
+  assert.deepEqual(itens[2].heading_3.rich_text.map((t) => [t.text.content, !!t.annotations?.bold]), [['3. ', false], ['Clique em ', false], ['«Executar»', true], [' para abrir a transação', false]]);
 
   const guia = await esperarGuia(ID_MAC, (g) => g.publicacoes.some((p) => p.concluida), 'publicação registrada');
   const pub = guia.publicacoes[0];
@@ -698,6 +699,53 @@ test('recorte «Focar no alvo» segue recorteFocado e «Remover recorte» o apag
   assert.equal(guia.passos[1].anotacoes.length, 2, 'as anotações automáticas continuam');
 });
 
+test('enquadramento: zoom no alvo por padrão; «Tela inteira» no passo e no guia mudam a área do canvas, com desfazer', async () => {
+  await page.keyboard.press('Escape');            // sai da ferramenta de recorte
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"]');
+  const focado = recorteFocado({ x: 2540, y: 292, w: 144, h: 52 }, { largura: 2880, altura: 1620 }, { escala: 2 });
+  const area = (a) => page.waitForFunction((t) => document.querySelector('.canvas-palco')?.dataset.area === t, `${a.x},${a.y},${a.w},${a.h}`);
+  const INTEIRA = { x: 0, y: 0, w: 2880, h: 1620 };
+  // guia importado sem `estilo.zoom` nem `passo.zoom`: o canvas já mostra a área ampliada, sem recorte gravado
+  await area(focado);
+  assert.equal(await page.$eval('#passo-zoom', (s) => s.value), '');
+  assert.match(await page.$eval('#passo-zoom option[value=""]', (o) => o.textContent), /Padrão do guia \(zoom no alvo\)/);
+  assert.equal(await page.$eval('#guia-zoom', (s) => s.value), 'alvo');
+  // override do passo
+  await page.selectOption('#passo-zoom', 'tela');
+  await area(INTEIRA);
+  let guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].zoom === 'tela', 'zoom do passo gravado');
+  assert.ok(!guia.passos[1].anotacoes.some((a) => a.tipo === 'recorte'), 'não destrutivo: nenhum recorte criado');
+  // desfazer / refazer (cada mudança é uma entrada de histórico)
+  await page.locator('#canvas-preview').focus();
+  await page.keyboard.press('Control+z');
+  await area(focado);
+  guia = await esperarGuia(ID_EXEMPLO, (g) => !('zoom' in g.passos[1]), 'zoom desfeito');
+  await page.keyboard.press('Control+Shift+z');
+  await area(INTEIRA);
+  // de volta ao padrão do guia, e o padrão do guia em «Tela inteira»
+  await page.selectOption('#passo-zoom', '');
+  await area(focado);
+  await page.selectOption('#guia-zoom', 'tela');
+  await area(INTEIRA);
+  guia = await esperarGuia(ID_EXEMPLO, (g) => g.estilo.zoom === 'tela' && !('zoom' in g.passos[1]), 'padrão do guia gravado');
+  assert.match(await page.$eval('#passo-zoom option[value=""]', (o) => o.textContent), /tela inteira/);
+  // passo com «Zoom no alvo» vence o padrão do guia
+  await page.selectOption('#passo-zoom', 'alvo');
+  await area(focado);
+  await page.selectOption('#guia-zoom', 'alvo');
+  // recorte manual manda: o controle fica desabilitado e explica
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr03ac"]');
+  await area({ x: 400, y: 400, w: 1600, h: 800 });
+  assert.equal(await page.$eval('#passo-zoom', (s) => s.disabled), true);
+  assert.match(await page.$eval('#passo-zoom-nota', (e) => e.textContent), /recorte deste passo define a área/);
+  // os testes seguintes anotam o passo 2 pela imagem inteira
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"]');
+  await page.selectOption('#passo-zoom', 'tela');
+  await area(INTEIRA);
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[1].zoom === 'tela' && g.estilo.zoom === 'alvo', 'passo 2 em tela inteira');
+  await page.locator('#canvas-preview').focus();
+});
+
 test('marcador e texto: número seguinte, fonte proporcional à escala e fundo', async () => {
   await page.keyboard.press('Escape');            // volta a Selecionar
   await page.keyboard.press('m');
@@ -769,6 +817,76 @@ test('Shift+Enter confirma o texto e quebras de linha coladas viram espaço (o r
   const texto = guia.passos[1].anotacoes.at(-1);
   assert.equal(texto.tipo, 'texto');
   assert.equal(texto.texto, 'linha um linha dois');
+});
+
+test('dicas e alertas: adicionar, editar (com desfazer), indicador no cartão, caixa vazia some; saem no HTML exportado e no Notion', async () => {
+  await page.keyboard.press('Escape');
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr03ac"]');
+  await page.waitForSelector('#passo-notas');
+  assert.equal(await page.$$eval('#passo-notas .nota-item', (els) => els.length), 0);
+  // adicionar um alerta: a caixa nasce com o foco no texto
+  await page.click('.nota-add--atencao');
+  await page.waitForSelector('#passo-notas .nota-item--atencao textarea:focus');
+  await page.keyboard.type('Confira o CNPJ antes de salvar', { delay: 5 });
+  let guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].notas?.[0]?.texto === 'Confira o CNPJ antes de salvar', 'alerta gravado');
+  const nota = guia.passos[2].notas[0];
+  assert.equal(nota.tipo, 'atencao');
+  assert.match(nota.id, /^n_[0-9a-z]{8,24}$/);
+  await page.waitForSelector('.passo-cartao[data-id="p_m1x4k9zr03ac"] .cartao-nota--atencao');
+  // o texto digitado é uma entrada só no histórico (coalescência)
+  await page.locator('#canvas-preview').focus();
+  await page.keyboard.press('Control+z');
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].notas?.[0]?.texto === '', 'texto desfeito de uma vez');
+  await page.keyboard.press('Control+Shift+z');
+  await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].notas?.[0]?.texto === 'Confira o CNPJ antes de salvar', 'texto refeito');
+  assert.equal(await page.$eval('#passo-notas .nota-item--atencao textarea', (t) => t.value), 'Confira o CNPJ antes de salvar');
+  // uma dica deixada vazia some ao sair do campo
+  await page.click('.nota-add--dica');
+  await page.waitForSelector('#passo-notas .nota-item--dica textarea:focus');
+  guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].notas?.length === 2, 'dica vazia criada');
+  await page.click('#passo-descricao');
+  guia = await esperarGuia(ID_EXEMPLO, (g) => g.passos[2].notas?.length === 1, 'dica vazia removida');
+  assert.equal(guia.passos[2].notas[0].tipo, 'atencao');
+
+  // HTML exportado: caixa colorida com rótulo, a dica do fixture no passo 2 e o alerta novo no passo 3
+  await page.click('#btn-exportar');
+  const download = page.waitForEvent('download', { timeout: 60000 });
+  await page.click('.menu-item:has-text("HTML autocontido")');
+  const html = await readFile(await (await download).path(), 'utf8');
+  const doc = await contexto.newPage();
+  await doc.setContent(html);
+  assert.deepEqual(await doc.$$eval('.nota', (els) => els.map((e) => [e.className, e.querySelector('.nota-rotulo').textContent, e.querySelector('.nota-texto').textContent])), [
+    ['nota nota--dica', 'Dica', 'O botão fica no canto superior direito da lista de parceiros.'],
+    ['nota nota--atencao', 'Atenção', 'Confira o CNPJ antes de salvar'],
+    ['nota nota--atencao', 'Atenção', 'Nunca compartilhe sua senha: o campo sai desfocado no manual.'],
+    ['nota nota--nota', 'Nota', 'Se o e-mail não chegar, confira a caixa de spam.'],
+  ]);
+  assert.equal(await doc.$eval('#passo-3 .nota--atencao', (e) => getComputedStyle(e).borderTopColor), 'rgb(255, 164, 54)', 'atenção em âmbar');
+  assert.match(await doc.$eval('.meta', (e) => e.textContent), /Diego · 9 passos · ≈ 2 min · \d{2}\/\d{2}\/\d{4}/);
+  await doc.close();
+
+  // Notion falso: callout por nota, com emoji e cor do tipo
+  await page.click('#btn-notion');
+  // o guia importado traz uma publicação pendente (teste da importação): publica numa página nova
+  await page.waitForSelector('#notion-publicar:visible, #notion-nova:visible');
+  await page.waitForFunction(() => /Página-mãe: Manuais/.test(document.querySelector('#notion-pai')?.textContent ?? ''));
+  const antes = notion.registros.length;
+  await page.click((await page.$('#notion-publicar:visible')) ? '#notion-publicar' : '#notion-nova');
+  await page.waitForSelector('#notion-link', { timeout: 60000 });
+  const criacao = notion.registros.slice(antes).find((r) => r.rota === '/v1/pages');
+  const callouts = criacao.corpo.children.filter((b) => b.type === 'callout').map((b) => [b.callout.icon.emoji, b.callout.color, b.callout.rich_text.map((t) => t.text.content).join('')]);
+  assert.deepEqual(callouts.slice(1), [
+    ['💡', 'green_background', 'Dica: O botão fica no canto superior direito da lista de parceiros.'],
+    ['⚠️', 'orange_background', 'Atenção: Confira o CNPJ antes de salvar'],
+    ['⚠️', 'orange_background', 'Atenção: Nunca compartilhe sua senha: o campo sai desfocado no manual.'],
+    ['📝', 'purple_background', 'Nota: Se o e-mail não chegar, confira a caixa de spam.'],
+  ]);
+  const tipos = criacao.corpo.children.map((b) => b.type);
+  const iAlerta = criacao.corpo.children.findIndex((b) => b.type === 'callout' && /CNPJ/.test(b.callout.rich_text.map((t) => t.text.content).join('')));
+  assert.deepEqual(tipos.slice(iAlerta - 2, iAlerta + 2), ['heading_3', 'paragraph', 'callout', 'image'], 'título, descrição, alerta e imagem do passo 3');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#notion-token', { state: 'detached' });
+  await page.click('.passo-cartao[data-id="p_m1x4k9zr02ab"]');
 });
 
 test('digitar na descrição não redesenha o canvas nem recria os cartões da lista', async () => {

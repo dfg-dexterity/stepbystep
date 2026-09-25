@@ -5,6 +5,7 @@
 import { criarClienteNotion, publicacaoRetomavel } from '../core/notion-cliente.js';
 import { obterConfig, salvarConfig, carregarGuia as lerGuiaDoBanco, salvarGuia } from '../core/armazenamento.js';
 import { assarPasso } from '../core/render-canvas.js';
+import { fontesDoDesenho } from './exportar.js';
 import { obterBitmap } from './canvas-anotacao.js';
 import { estado, temImagem } from './estado.js';
 import { marcarAlterado, salvarAgora, definirVersaoGravada } from './historico.js';
@@ -272,6 +273,7 @@ export async function abrirNotion(cfg) {
     if (!temImagem(passo)) return null;
     const bitmap = await obterBitmap(passo.captura.imagemId);
     if (!bitmap) return null;
+    await fontesDoDesenho();
     const { blob } = await assarPasso(bitmap, passo, { estilo: guia.estilo });
     return blob;
   }

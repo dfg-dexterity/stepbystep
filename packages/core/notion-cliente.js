@@ -1,6 +1,6 @@
 // Cliente da API do Notion com `fetch` injetado: token do usuário, File Upload API, publicação retomável.
 // Da extensão chama api.notion.com direto; do editor hospedado passa por /api/notion (proxy sem estado).
-import { numeroDoPasso } from './modelo.js';
+import { numeroDoPasso, notasDoPasso, zoomDoPasso } from './modelo.js';
 import { guiaParaBlocos, dividirEmLotes, richText } from './notion-blocos.js';
 import { reduzirImagem } from './redimensionar.js';
 
@@ -49,13 +49,17 @@ export function publicacaoRetomavel(publicacao) {
 const temImagem = (p) => p.tipo !== 'secao' && !!(p.captura && !p.captura.faltante && p.captura.imagemId);
 
 /**
- * Impressão digital do que vai para a página: título e descrição do guia e, por passo, id, tipo, título, descrição e imagem.
+ * Impressão digital do que vai para a página: título, descrição e autor do guia e, por passo, id, tipo, título,
+ * descrição, imagem, notas (tipo e texto) e enquadramento efetivo da imagem (zoom no alvo ou tela inteira).
  * Gravada em `publicacao.impressao`; na retomada, se mudou, os lotes já enviados não correspondem mais aos passos.
  * @param {object} guia @returns {Promise<string>} SHA-256 em hexadecimal
  */
 export async function impressaoDoGuia(guia) {
-  const passos = (guia.passos ?? []).map((p) => [p.id, p.tipo, p.titulo ?? '', p.descricao ?? '', temImagem(p) ? p.captura.imagemId : null]);
-  const bytes = new TextEncoder().encode(JSON.stringify([guia.titulo ?? '', guia.descricao ?? '', passos]));
+  const passos = (guia.passos ?? []).map((p) => [
+    p.id, p.tipo, p.titulo ?? '', p.descricao ?? '', temImagem(p) ? p.captura.imagemId : null,
+    notasDoPasso(p).map((n) => [n.tipo, n.texto]), temImagem(p) ? zoomDoPasso(p, guia.estilo) : null,
+  ]);
+  const bytes = new TextEncoder().encode(JSON.stringify([guia.titulo ?? '', guia.descricao ?? '', guia.autor ?? '', passos]));
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(hash, (b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -244,39 +248,39 @@ export function criarClienteNotion(cfg) {
         impressao,
       };
 
-      // janelas de passos: corta quando a janela já tem 30 imagens
-      const janelas = [];
-      let atual = [];
+      // janelas de passos: corta quando a janela já tem 30 imagens (uploads expiram em 1 h)
+      const janelaDoPasso = [];
+      let janelaAtual = 0;
       let imagensNaJanela = 0;
-      for (const p of guia.passos) {
-        if (temImagem(p) && imagensNaJanela === JANELA_UPLOADS) { janelas.push(atual); atual = []; imagensNaJanela = 0; }
-        atual.push(p);
+      guia.passos.forEach((p, i) => {
+        if (temImagem(p) && imagensNaJanela === JANELA_UPLOADS) { janelaAtual++; imagensNaJanela = 0; }
+        janelaDoPasso[i] = janelaAtual;
         if (temImagem(p)) imagensNaJanela++;
-      }
-      janelas.push(atual);
+      });
+      const totalJanelas = janelaAtual + 1;
 
-      const { titulo, blocos: blocosVazios } = guiaParaBlocos(guia, { uploadIdDoPasso: () => null, data: o.data });
-      const cabecalho = blocosVazios.length - guia.passos.length;   // callout (+ parágrafo da descrição)
-      const blocosDaFaixa = (inicio, fim, uploadIdDoPasso) => {
-        const todos = guiaParaBlocos(guia, { uploadIdDoPasso, data: o.data }).blocos;
-        return inicio === 0 ? todos.slice(0, cabecalho + fim) : todos.slice(cabecalho + inicio, cabecalho + fim);
+      // Blocos com um marcador no lugar do id do upload: a estrutura dos lotes não depende dos ids reais (nem de
+      // uma imagem que falhe), então a retomada conta os lotes sempre da mesma forma. Cada passo gera vários blocos
+      // de topo; o cabeçalho vai com a primeira janela.
+      const MARCA = 'sbs-upload:';
+      const { titulo, blocos, origem } = guiaParaBlocos(guia, { uploadIdDoPasso: (p) => (temImagem(p) ? MARCA + p.id : null), data: o.data });
+      const blocosPorJanela = Array.from({ length: totalJanelas }, () => []);
+      const passoDoBloco = new Map();
+      blocos.forEach((b, k) => {
+        const i = origem[k];
+        blocosPorJanela[i >= 0 ? janelaDoPasso[i] : 0].push(b);
+        if (i >= 0) passoDoBloco.set(b, guia.passos[i]);
+      });
+      const lotesPorJanela = blocosPorJanela.map((lista) => dividirEmLotes(lista));
+      const passosDoLote = (lote) => [...new Set(lote.map((b) => passoDoBloco.get(b)).filter(Boolean))];
+      /** Troca o marcador pelo id real do upload; imagem sem upload (passo sem bitmap) sai do lote. */
+      const resolver = (b) => {
+        const id = b.type === 'image' ? b.image.file_upload?.id : null;
+        if (typeof id !== 'string' || !id.startsWith(MARCA)) return b;
+        const real = publicacao.uploads[id.slice(MARCA.length)];
+        return real ? { ...b, image: { ...b.image, file_upload: { id: real } } } : null;
       };
-      const placeholder = (p) => (temImagem(p) ? 'pendente' : null);
 
-      // lotes por janela e passos cobertos por cada lote (a estrutura não depende dos ids reais dos uploads)
-      const lotesPorJanela = [];
-      let inicio = 0;
-      for (const janela of janelas) {
-        const lotes = dividirEmLotes(blocosDaFaixa(inicio, inicio + janela.length, placeholder));
-        let cursor = 0;
-        lotesPorJanela.push(lotes.map((lote, k) => {
-          const n = lote.length - (inicio === 0 && k === 0 ? cabecalho : 0);
-          const passos = janela.slice(cursor, cursor + n);
-          cursor += n;
-          return passos;
-        }));
-        inicio += janela.length;
-      }
       const totalLotes = lotesPorJanela.reduce((s, l) => s + l.length, 0);
       const totalImagens = guia.passos.filter(temImagem).length;
       let imagensFeitas = guia.passos.filter((p) => temImagem(p) && publicacao.uploads[p.id]).length;
@@ -284,15 +288,11 @@ export function criarClienteNotion(cfg) {
       const progresso = (fase, atualN, total) => aoProgredir({ fase, atual: atualN, total, publicacao });
 
       try {
-        inicio = 0;
-        for (let j = 0; j < janelas.length; j++) {
-          const janela = janelas[j];
-          const fim = inicio + janela.length;
-          const lotesDaJanela = lotesPorJanela[j];
-          if (loteGlobal + lotesDaJanela.length <= publicacao.lotesEnviados) { loteGlobal += lotesDaJanela.length; inicio = fim; continue; }
+        for (const lotes of lotesPorJanela) {
+          if (loteGlobal + lotes.length <= publicacao.lotesEnviados) { loteGlobal += lotes.length; continue; }
 
           // só sobe imagens de passos em lotes ainda não enviados (retomada não repete o que já está na página)
-          const pendentes = lotesDaJanela.filter((_, k) => loteGlobal + k >= publicacao.lotesEnviados).flat();
+          const pendentes = [...new Set(lotes.filter((_, k) => loteGlobal + k >= publicacao.lotesEnviados).flatMap(passosDoLote))];
           for (const p of pendentes) {
             if (!temImagem(p) || publicacao.uploads[p.id]) continue;
             progresso('upload', imagensFeitas + 1, totalImagens);
@@ -302,22 +302,21 @@ export function criarClienteNotion(cfg) {
             imagensFeitas++;
           }
 
-          const lotes = dividirEmLotes(blocosDaFaixa(inicio, fim, (p) => publicacao.uploads[p.id] ?? null));
-          for (const lote of lotes) {
+          for (const loteMarcado of lotes) {
             if (loteGlobal < publicacao.lotesEnviados) { loteGlobal++; continue; }
+            const lote = loteMarcado.map(resolver).filter(Boolean);
             if (!publicacao.paginaId) {
               progresso('pagina', 1, 1);
               const pagina = await cliente.criarPagina(paiId, titulo, lote);
               publicacao.paginaId = pagina.id;
               publicacao.url = pagina.url;
-            } else {
+            } else if (lote.length) {
               progresso('blocos', loteGlobal + 1, totalLotes);
               await cliente.anexarBlocos(publicacao.paginaId, lote);
             }
             loteGlobal++;
             publicacao.lotesEnviados = loteGlobal;
           }
-          inicio = fim;
         }
         publicacao.concluida = true;
         const resultado = { paginaId: publicacao.paginaId, url: publicacao.url, publicacao };

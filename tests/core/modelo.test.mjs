@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   FORMATO, VERSAO, TIPOS_PASSO, TIPOS_ANOTACAO, PAPEIS, CORES,
   criarGuia, criarPasso, criarAnotacao, validarGuia, migrarGuia, clonarGuia, renumerarMarcadores, numeroDoPasso,
+  criarNota, notasDoPasso, zoomDoPasso, resumoDoGuia, TIPOS_NOTA, SEGUNDOS_POR_TIPO,
 } from '../../packages/core/modelo.js';
 import { validarId } from '../../packages/core/ids.js';
 import { lerFixture } from './util.mjs';
@@ -41,6 +42,10 @@ test('criarPasso gera passo válido com padrões', () => {
   assert.equal(p.descricao, '');
   assert.equal(p.contexto, null);
   assert.deepEqual(p.anotacoes, []);
+  assert.deepEqual(p.notas, []);
+  assert.equal('zoom' in p, false);                   // sem override: herda do guia
+  assert.equal(criarPasso({ tipo: 'clicar', zoom: 'tela' }).zoom, 'tela');
+  assert.equal('zoom' in criarPasso({ tipo: 'clicar', zoom: 'zoom' }), false);
   assert.ok(!Number.isNaN(Date.parse(p.criadoEm)));
   const g = criarGuia();
   g.passos.push(p, criarPasso({ tipo: 'secao', titulo: 'Seção', tituloAuto: false }));
@@ -197,4 +202,58 @@ test('renumerarMarcadores segue a ordem dos passos e preserva marcadores manuais
   assert.equal(movido.anotacoes[2].numero, 42);  // manual mantém
   assert.equal(g.passos[1].anotacoes.find((a) => a.tipo === 'marcador').numero, 2);
   assert.equal(validarGuia(g).ok, true);
+});
+
+test('notas, zoom e resumo: criarNota, validarGuia, notasDoPasso, zoomDoPasso e resumoDoGuia', () => {
+  assert.equal(criarGuia().estilo.zoom, 'alvo');
+  const n = criarNota('dica', 'Texto');
+  assert.ok(validarId(n.id) && n.id.startsWith('n_'));
+  assert.deepEqual({ tipo: n.tipo, texto: n.texto }, { tipo: 'dica', texto: 'Texto' });
+  assert.throws(() => criarNota('perigo'), /Tipo de nota inválido/);
+  assert.deepEqual(TIPOS_NOTA, ['dica', 'atencao', 'nota']);
+
+  // o fixture tem notas nos passos 2, 4 e 9 e é válido
+  const g = exemplo();
+  assert.deepEqual(validarGuia(g), { ok: true, erros: [] });
+  // ausentes são válidos (guias antigos e o Mac não gravam notas/zoom)
+  const antigo = exemplo();
+  delete antigo.estilo.zoom;
+  for (const p of antigo.passos) { delete p.notas; delete p.zoom; }
+  assert.equal(validarGuia(antigo).ok, true);
+  assert.deepEqual(migrarGuia(antigo), antigo, 'migrar não precisa completar notas/zoom');
+
+  const invalido = exemplo();
+  invalido.estilo.zoom = 'perto';
+  invalido.passos[0].zoom = 'longe';
+  invalido.passos[1].notas.push({ id: 'n_m1x4k9zr02n9', tipo: 'perigo', texto: 'x' }, { id: 'n_m1x4k9zr02n1', tipo: 'nota', texto: '  ' }, { id: 'a_m1x4k9zr02n8', tipo: 'nota', texto: 'ok' });
+  invalido.passos[2].notas = 'x';
+  const r = validarGuia(invalido);
+  assert.equal(r.ok, false);
+  for (const trecho of ['estilo.zoom deve ser um de alvo, tela', 'passos[0].zoom deve ser alvo, tela ou null', 'passos[1].notas[1].tipo deve ser um de dica, atencao, nota',
+    'passos[1].notas[2].texto deve ser texto não vazio', 'passos[1].notas[2].id repete o id "n_m1x4k9zr02n1" de passos[1].notas[0].id', 'passos[1].notas[3].id deve começar com "n_"', 'passos[2].notas deve ser uma lista']) {
+    assert.ok(r.erros.includes(trecho), `${trecho}\n${r.erros.join('\n')}`);
+  }
+  const zoomNulo = exemplo();
+  zoomNulo.passos[1].zoom = null;
+  assert.equal(validarGuia(zoomNulo).ok, true);
+
+  // notasDoPasso: só as exportáveis
+  assert.deepEqual(notasDoPasso({ notas: [{ id: 'n_1', tipo: 'dica', texto: 'a' }, { id: 'n_2', tipo: 'dica', texto: ' ' }, { id: 'n_3', tipo: 'x', texto: 'b' }, null] }).map((x) => x.id), ['n_1']);
+  assert.deepEqual(notasDoPasso({}), []);
+  // zoomDoPasso: passo > guia > 'alvo'
+  assert.equal(zoomDoPasso({}, {}), 'alvo');
+  assert.equal(zoomDoPasso({}, { zoom: 'tela' }), 'tela');
+  assert.equal(zoomDoPasso({ zoom: 'alvo' }, { zoom: 'tela' }), 'alvo');
+  assert.equal(zoomDoPasso({ zoom: null }, { zoom: 'tela' }), 'tela');
+  assert.equal(zoomDoPasso({ zoom: 'x' }, { zoom: 'y' }), 'alvo');
+
+  // resumo: 9 passos numerados (a seção não conta); 5+5+10+10+3+6+6+5+15 = 65 s → 2 min
+  assert.deepEqual(resumoDoGuia(g), { passos: 9, minutos: 2, autor: 'Diego', data: '2026-09-24T14:21:40.000Z' });
+  assert.deepEqual(resumoDoGuia(criarGuia({ autor: '  Ana ' })), { passos: 0, minutos: 1, autor: 'Ana', data: resumoDoGuia(criarGuia()).data });
+  const doze = criarGuia();
+  for (let i = 0; i < 12; i++) doze.passos.push(criarPasso({ tipo: 'digitar' }));   // 120 s = 2 min exatos
+  assert.equal(resumoDoGuia(doze).minutos, 2);
+  doze.passos.push(criarPasso({ tipo: 'tecla' }));                                   // 123 s → 3 min
+  assert.equal(resumoDoGuia(doze).minutos, 3);
+  assert.equal(SEGUNDOS_POR_TIPO.manual, 15);
 });

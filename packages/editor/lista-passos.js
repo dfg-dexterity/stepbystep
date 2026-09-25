@@ -1,10 +1,10 @@
 // Coluna esquerda: cartões de passo com miniatura (160 px), número mono e título.
 // Reordenar por arraste (Pointer Events + setPointerCapture) ou Alt+↑/↓; menu de ações por passo.
-import { criarPasso, renumerarMarcadores, numeroDoPasso } from '../core/modelo.js';
+import { criarPasso, renumerarMarcadores, numeroDoPasso, notasDoPasso, zoomDoPasso, NOMES_NOTA } from '../core/modelo.js';
 import { gerarTitulo } from '../core/frases.js';
 import { gerarId } from '../core/ids.js';
 import { desenharPasso } from '../core/render-canvas.js';
-import { separarRecorte, areaSaida } from '../core/anotacoes.js';
+import { areaEfetiva } from '../core/anotacoes.js';
 import { estado, on, selecionarPasso, indiceDoPasso, plataformaDoGuia, temImagem } from './estado.js';
 import { aplicar } from './historico.js';
 import { obterBitmap, esquecerBitmap, bitmapFechado, criarCanvas } from './canvas-anotacao.js';
@@ -101,6 +101,7 @@ export function duplicarPasso(id) {
   copia.id = gerarId('p');
   copia.criadoEm = new Date().toISOString();
   copia.anotacoes = copia.anotacoes.map((a) => ({ ...a, id: gerarId('a') }));
+  if (Array.isArray(copia.notas)) copia.notas = copia.notas.map((x) => ({ ...x, id: gerarId('n') }));
   if (temImagem(copia)) copia.captura = { ...copia.captura, fonte: 'compartilhada' };
   delete copia.mescladoDe;
   aplicar('duplicar passo', (guia) => {
@@ -114,7 +115,7 @@ export function duplicarPasso(id) {
 
 /**
  * Mescla o passo com o anterior: tipo/imagem do primeiro; título do primeiro se editado à mão,
- * senão "A e b"; anotações de B só se a imagem for a mesma; descrições concatenadas; mescladoDe.
+ * senão "A e b"; anotações de B só se a imagem for a mesma; descrições e notas concatenadas; mescladoDe.
  */
 export function mesclarComAnterior(id) {
   const guia = estado.guia;
@@ -127,6 +128,8 @@ export function mesclarComAnterior(id) {
     A.titulo = A.tituloAuto === false ? A.titulo : `${A.titulo} e ${minusculaInicial(B.titulo)}`;
     A.tituloAuto = false;
     A.descricao = [A.descricao, B.descricao].filter(Boolean).join('\n\n');
+    const notasB = (B.notas ?? []).map((x) => ({ ...x, id: gerarId('n') }));
+    if (notasB.length) A.notas = [...(A.notas ?? []), ...notasB];
     if (temImagem(A) && temImagem(B) && A.captura.imagemId === B.captura.imagemId) {
       const temRecorte = A.anotacoes.some((x) => x.tipo === 'recorte');
       for (const an of B.anotacoes) {
@@ -214,8 +217,9 @@ export function montarListaPassos(raiz) {
   let processando = false;
   let destruido = false;
 
-  const assinatura = (p, guia) => `${p.captura?.imagemId}|${JSON.stringify(p.anotacoes)}|${guia.estilo?.cor}|${guia.estilo?.escurecerFora}`;
-  const assinaturaCartao = (p, i, guia) => [p.tipo, numeroDoPasso(guia, i), p.titulo, !!p.captura?.faltante, !!p.evento?.sensivel, temImagem(p), assinatura(p, guia)].join('\u0000');
+  const assinatura = (p, guia) => `${p.captura?.imagemId}|${JSON.stringify(p.anotacoes)}|${guia.estilo?.cor}|${guia.estilo?.escurecerFora}|${zoomDoPasso(p, guia.estilo)}`;
+  const notasDoCartao = (p) => notasDoPasso(p).map((n) => n.tipo).join(',');
+  const assinaturaCartao = (p, i, guia) => [p.tipo, numeroDoPasso(guia, i), p.titulo, !!p.captura?.faltante, !!p.evento?.sensivel, temImagem(p), notasDoCartao(p), assinatura(p, guia)].join('\u0000');
 
   async function renderizarMiniatura(passoId, alvo) {
     const guia = estado.guia;
@@ -228,8 +232,7 @@ export function montarListaPassos(raiz) {
     if (bitmapFechado(bmp)) { esquecerBitmap(passo.captura.imagemId); bmp = await obterBitmap(passo.captura.imagemId); }   // fechado pelo LRU: recarrega
     if (destruido || !bmp || !alvo.isConnected) return;
     const imagem = { largura: bmp.width, altura: bmp.height, fonte: bmp };
-    const { recorte } = separarRecorte(passo.anotacoes);
-    const area = areaSaida(imagem, recorte);
+    const area = areaEfetiva(passo, imagem, guia.estilo);   // a miniatura mostra o que a exportação vai mostrar
     // backing store em pixels físicos (até 2x) para a miniatura ficar nítida em telas Retina
     const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
     const escala = (LARGURA_MINI * dpr) / area.w;
@@ -326,6 +329,18 @@ export function montarListaPassos(raiz) {
     linha.append(numero, tipo);
     if (passo.evento?.sensivel) { const b = document.createElement('span'); b.className = 'dxt-badge dxt-badge--down'; b.textContent = 'sensível'; linha.append(b); }
     if (passo.captura?.faltante) { const b = document.createElement('span'); b.className = 'dxt-badge dxt-badge--down'; b.textContent = 'sem imagem'; linha.append(b); }
+    const notas = notasDoPasso(passo);
+    if (notas.length) {
+      // um quadradinho por nota, na cor do tipo (dica cerceta, atenção âmbar, nota roxo)
+      const ind = document.createElement('span');
+      ind.className = 'cartao-notas';
+      const resumo = notas.map((x) => NOMES_NOTA[x.tipo]).join(', ');
+      ind.title = `Dicas e alertas: ${resumo}`;
+      ind.setAttribute('aria-label', `${notas.length} ${notas.length === 1 ? 'caixa' : 'caixas'}: ${resumo}`);
+      ind.setAttribute('role', 'img');
+      for (const x of notas) { const q = document.createElement('i'); q.className = `cartao-nota cartao-nota--${x.tipo}`; ind.append(q); }
+      linha.append(ind);
+    }
     const titulo = document.createElement('div');
     titulo.className = 'titulo';
     titulo.textContent = passo.titulo || (passo.tipo === 'secao' ? 'Seção sem título' : 'Passo sem título');

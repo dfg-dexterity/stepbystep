@@ -86,8 +86,20 @@ test('recorteFocado: alvo largo e perto da borda', () => {
   // imagem pequena: recorte nunca ultrapassa a imagem
   const pequena = recorteFocado({ x: 10, y: 10, w: 20, h: 20 }, { largura: 300, altura: 100 }, { margem: 120 });
   assert.deepEqual(pequena, { x: 0, y: 0, w: 160, h: 100 });
-  // margem padrão = 120·escala (escala 1)
-  assert.equal(recorteFocado({ x: 0, y: 0, w: 1000, h: 10 }, { largura: 2000, altura: 2000 }).w, 1240);
+  // margem padrão = 120·escala (escala 1); imagem quadrada: a altura mínima (40 % de 2000 = 800) manda
+  const quadrada = recorteFocado({ x: 0, y: 0, w: 1000, h: 10 }, { largura: 2000, altura: 2000 });
+  assert.deepEqual([quadrada.w, quadrada.h], [1280, 800]);
+});
+
+test('recorteFocado em tela retrato (celular): ≥ 40 % da altura, sem virar uma faixa fina', () => {
+  const imagem = { largura: 780, altura: 1688 };
+  const r = recorteFocado({ x: 300, y: 900, w: 120, h: 40 }, imagem, { escala: 2 });
+  assert.equal(r.w, 780);                          // 40 %·1688·16/10 > largura → a imagem inteira na largura
+  assert.equal(r.h, 488);                          // 16:10
+  assert.ok(r.h >= 0.28 * imagem.altura);
+  assert.ok(r.y <= 900 && r.y + r.h >= 940, 'o alvo fica dentro');
+  // 16:9 (o caso comum) não muda: 40 % da largura já cobre 40 % da altura
+  assert.equal(recorteFocado({ x: 1400, y: 800, w: 100, h: 40 }, { largura: 2880, altura: 1620 }, { escala: 2 }).w, 1152);
 });
 
 test('recorteFocado nunca sai da imagem por arredondamento (w = 0,4·W com h fracionário em ,5)', () => {

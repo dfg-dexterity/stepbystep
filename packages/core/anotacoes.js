@@ -1,8 +1,8 @@
 // Anotações não destrutivas (px da imagem original): normalização, geometria, hit-test e
 // anotações automáticas da captura. O recorte é janela de saída e não desloca as demais.
 import { gerarId, validarId } from './ids.js';
-import { TIPOS_ANOTACAO, TOKENS_COR } from './modelo.js';
-import { limitarAImagem, posicaoMarcador } from './coordenadas.js';
+import { TIPOS_ANOTACAO, TOKENS_COR, zoomDoPasso } from './modelo.js';
+import { limitarAImagem, posicaoMarcador, recorteFocado } from './coordenadas.js';
 
 const COM_COR = new Set(['retangulo', 'seta', 'marcador', 'texto']);
 
@@ -45,6 +45,28 @@ export function areaSaida(imagem, recorte) {
   const inteira = { x: 0, y: 0, w: imagem.largura, h: imagem.altura };
   if (!recorte) return inteira;
   const r = limitarAImagem(recorte, imagem);
+  return r.w > 0 && r.h > 0 ? r : inteira;
+}
+
+/**
+ * Área efetiva de saída do passo (janela da imagem que a exportação e o canvas mostram), sem alterar o guia:
+ * 1. recorte explícito → ele, limitado à imagem (como areaSaida);
+ * 2. senão, enquadramento 'alvo' (do passo ou, herdado, do guia; ausente = 'alvo') e alvo.bbox com w,h > 0 →
+ *    recorteFocado(bbox) na escala da captura (zoom estilo Tango, com o retângulo e o marcador automáticos dentro);
+ * 3. senão, a imagem inteira.
+ * @param {object} passo @param {{largura:number, altura:number}} imagem @param {{zoom?:'alvo'|'tela'}} [estilo] do guia
+ * @returns {{x,y,w,h}}
+ */
+export function areaEfetiva(passo, imagem, estilo) {
+  const { recorte } = separarRecorte(passo?.anotacoes);
+  if (recorte) return areaSaida(imagem, recorte);
+  const inteira = { x: 0, y: 0, w: imagem.largura, h: imagem.altura };
+  const bbox = passo?.alvo?.bbox;
+  if (zoomDoPasso(passo, estilo) !== 'alvo' || !rectValido(bbox)) return inteira;
+  const alvo = limitarAImagem(bbox, imagem);
+  if (!(alvo.w > 0 && alvo.h > 0)) return inteira;
+  const e = passo.captura?.escala > 0 ? passo.captura.escala : 1;
+  const r = recorteFocado(alvo, imagem, { escala: e });
   return r.w > 0 && r.h > 0 ? r : inteira;
 }
 

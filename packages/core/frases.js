@@ -24,6 +24,37 @@ const normalizarEspacos = (texto) => String(texto ?? '').replace(/\s+/g, ' ').tr
 // «» delimitam o alvo na frase (e o negrito no Notion): dentro do alvo viram ‹›, senão o par fecha cedo
 const semAspasDoAlvo = (texto) => texto.replace(/«/g, '‹').replace(/»/g, '›');
 
+/** Índice do `»` que fecha o `«` em `inicio` (pares aninhados contam), ou -1 se não fecha. */
+function fimDoPar(texto, inicio) {
+  let abertos = 0;
+  for (let i = inicio; i < texto.length; i++) {
+    if (texto[i] === '«') abertos++;
+    else if (texto[i] === '»' && --abertos === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Título em trechos: os pares «…» mais externos são o alvo (destaque: negrito no Notion e no HTML); «» sem par
+ * ficam literais. A concatenação dos trechos é sempre o título original.
+ * @returns {{texto:string, destaque:boolean}[]}
+ */
+export function trechosDoTitulo(titulo) {
+  const texto = String(titulo ?? '');
+  const saida = [];
+  let plano = '';
+  for (let i = 0; i < texto.length;) {
+    const fim = texto[i] === '«' ? fimDoPar(texto, i) : -1;
+    if (fim < 0) { plano += texto[i++]; continue; }
+    if (plano) saida.push({ texto: plano, destaque: false });
+    plano = '';
+    saida.push({ texto: texto.slice(i, fim + 1), destaque: true });
+    i = fim + 1;
+  }
+  if (plano) saida.push({ texto: plano, destaque: false });
+  return saida;
+}
+
 /** @returns {string} texto normalizado (espaços colapsados) cortado em max-1 + '…' */
 export function truncar(texto, max) {
   const t = normalizarEspacos(texto);

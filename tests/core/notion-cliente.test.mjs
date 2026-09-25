@@ -102,7 +102,7 @@ test('publicarGuia: sequência users/me → file_uploads → send multipart → 
   assert.equal(r.url, URL_PAGINA);
   const rotas = f.chamadas.map((c) => `${c.metodo} ${c.rota}`);
   assert.equal(rotas[0], 'GET /v1/users/me');
-  // 8 passos com imagem → 8 pares upload/send, depois a página (um só lote: 12 blocos)
+  // 8 passos com imagem → 8 pares upload/send, depois a página (um só lote: 25 blocos de topo)
   assert.deepEqual(rotas.slice(1, 17), Array.from({ length: 8 }, (_, i) => [`POST /v1/file_uploads`, `POST /v1/file_uploads/up-${i + 1}/send`]).flat());
   assert.deepEqual(rotas.slice(17), ['POST /v1/pages']);
   // upload
@@ -120,11 +120,14 @@ test('publicarGuia: sequência users/me → file_uploads → send multipart → 
   assert.deepEqual(pagina.parent, { page_id: 'pai-1' });
   assert.deepEqual(pagina.icon, { type: 'emoji', emoji: '📘' });
   assert.deepEqual(pagina.properties, { title: { title: [{ type: 'text', text: { content: 'Cadastrar fornecedor no SAP Fiori' } } ] } });
-  assert.equal(pagina.children.length, 12);
+  assert.equal(pagina.children.length, 25);
   assert.equal(pagina.children[0].type, 'callout');
-  assert.equal(pagina.children[0].callout.rich_text[0].text.content, 'Manual gerado com StepByStep · Dexterity IT Solutions · 10 passos · 24/09/2026');
-  assert.equal(pagina.children[3].numbered_list_item.children[0].image.file_upload.id, 'up-2');
-  assert.equal(pagina.children[10].numbered_list_item.children[0].image.file_upload.id, 'up-8');
+  assert.equal(pagina.children[0].callout.rich_text[0].text.content, 'Diego · 9 passos · ≈ 2 min · 24/09/2026');
+  assert.equal(pagina.children[4].type, 'heading_3');
+  assert.equal(pagina.children[5].callout.icon.emoji, '💡');
+  assert.equal(pagina.children[6].image.file_upload.id, 'up-2');
+  assert.equal(pagina.children[21].image.file_upload.id, 'up-8');
+  assert.ok(!JSON.stringify(pagina.children).includes('sbs-upload:'), 'nenhum marcador de upload vai para o Notion');
   // publicação registrada
   assert.equal(r.publicacao.destino, 'notion');
   assert.equal(r.publicacao.concluida, true);
@@ -243,8 +246,9 @@ test('retomada: reaproveita paginaId e uploads recentes, sem novo POST /v1/pages
   const r = await cliente(f2).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async () => { throw new Error('não deveria assar de novo'); }, publicacaoAnterior: parcial, aoProgredir: (p) => progresso.push(p.fase) });
   const rotas2 = f2.chamadas.map((c) => `${c.metodo} ${c.rota}`);
   assert.deepEqual(rotas2, [`PATCH /v1/blocks/${PAGINA_ID}/children`]);
-  assert.equal(f2.chamadas[0].json.children.length, 21);
-  assert.equal(f2.chamadas[0].json.children.at(-10).numbered_list_item.children[0].image.file_upload.id, 'up-2');
+  // 1 callout + 120 heading_3 + 2 imagens = 123 blocos de topo: 100 no primeiro lote, 23 no segundo
+  assert.equal(f2.chamadas[0].json.children.length, 23);
+  assert.equal(f2.chamadas[0].json.children.at(-10).image.file_upload.id, 'up-2');
   assert.equal(r.paginaId, PAGINA_ID);
   assert.equal(r.url, URL_PAGINA);
   assert.equal(r.publicacao.concluida, true);
@@ -283,7 +287,7 @@ test('publicacaoRetomavel: só retoma com paginaId no formato do Notion; url for
   assert.deepEqual(publicacaoRetomavel(antiga), antiga);
 });
 
-test('impressaoDoGuia: muda com título, descrição, ordem, id, tipo, texto ou imagem dos passos; não com anotações', async () => {
+test('impressaoDoGuia: muda com título, descrição, autor, ordem, id, tipo, texto, imagem, notas ou enquadramento dos passos; não com anotações', async () => {
   const guia = lerFixture('guia-exemplo');
   const base = await impressaoDoGuia(guia);
   assert.match(base, /^[0-9a-f]{64}$/);
@@ -300,6 +304,13 @@ test('impressaoDoGuia: muda com título, descrição, ordem, id, tipo, texto ou 
     (g) => { g.passos[1].captura = { ...g.passos[1].captura, imagemId: null, faltante: true }; },
     (g) => { g.passos.splice(0, 0, criarPasso({ tipo: 'manual', titulo: 'Novo', tituloAuto: false })); },
     (g) => { g.passos.pop(); },
+    (g) => { g.autor = 'Outra pessoa'; },
+    (g) => { g.passos[1].notas[0].texto = 'Outra dica'; },
+    (g) => { g.passos[1].notas[0].tipo = 'atencao'; },
+    (g) => { g.passos[2].notas = [{ id: 'n_m1x4k9zr03n1', tipo: 'nota', texto: 'Nova' }]; },
+    (g) => { g.passos[1].notas = []; },
+    (g) => { g.passos[1].zoom = 'tela'; },               // enquadramento do passo muda a imagem assada
+    (g) => { g.estilo.zoom = 'tela'; },                  // padrão do guia idem
   ];
   for (const mudar of variantes) {
     const g = structuredClone(guia);
@@ -310,6 +321,13 @@ test('impressaoDoGuia: muda com título, descrição, ordem, id, tipo, texto ou 
   anotado.passos[1].anotacoes = [];
   anotado.atualizadoEm = '2030-01-01T00:00:00.000Z';
   assert.equal(await impressaoDoGuia(anotado), base);
+  // zoom explícito igual ao efetivo, nota vazia (em edição) e zoom de passo sem imagem não mudam a página
+  const equivalente = structuredClone(guia);
+  equivalente.estilo.zoom = 'alvo';
+  equivalente.passos[1].zoom = 'alvo';
+  equivalente.passos[2].notas = [{ id: 'n_m1x4k9zr03n1', tipo: 'dica', texto: '  ' }];
+  equivalente.passos[9].zoom = 'tela';
+  assert.equal(await impressaoDoGuia(equivalente), base);
 });
 
 test('retomada com o guia alterado (passo inserido) recomeça numa página nova, reaproveitando os uploads válidos', async () => {
@@ -330,15 +348,15 @@ test('retomada com o guia alterado (passo inserido) recomeça numa página nova,
   const assadas = [];
   const r = await cliente(f2).publicarGuia(editado, { paiId: 'pai', obterImagemAssada: async (p) => { assadas.push(p.id); return blobPng(10); }, publicacaoAnterior: parcial });
   const rotas = f2.chamadas.map((c) => `${c.metodo} ${c.rota}`);
-  // nenhum upload repetido (ids < 50 min), página nova com os 100 primeiros blocos e PATCH com os 22 restantes
+  // nenhum upload repetido (ids < 50 min), página nova com os 100 primeiros blocos e PATCH com os 24 restantes
   assert.deepEqual(rotas, ['POST /v1/pages', `PATCH /v1/blocks/${PAGINA_ID}/children`]);
   assert.deepEqual(assadas, []);
   const pagina = f2.chamadas[0].json;
   assert.equal(pagina.children.length, 100);
-  assert.equal(pagina.children[1].numbered_list_item.rich_text[0].text.content, 'Antes de tudo');
-  assert.equal(pagina.children[2].numbered_list_item.children[0].image.file_upload.id, 'up-1');
-  assert.equal(f2.chamadas[1].json.children.length, 22);
-  assert.equal(f2.chamadas[1].json.children.at(-10).numbered_list_item.children[0].image.file_upload.id, 'up-2');
+  assert.equal(pagina.children[1].heading_3.rich_text.map((t) => t.text.content).join(''), '1. Antes de tudo');
+  assert.equal(pagina.children[3].image.file_upload.id, 'up-1');
+  assert.equal(f2.chamadas[1].json.children.length, 24);
+  assert.equal(f2.chamadas[1].json.children.at(-10).image.file_upload.id, 'up-2');
   assert.equal(r.publicacao.concluida, true);
   assert.equal(r.publicacao.lotesEnviados, 2);
   assert.notEqual(r.publicacao.impressao, parcial.impressao);
@@ -434,9 +452,22 @@ test('janelas de 30 uploads seguidas de criação/anexo', async () => {
   const iPatch = rotas.indexOf(`PATCH /v1/blocks/${PAGINA_ID}/children`);
   assert.equal(rotas.slice(iPagina + 1, iPatch).filter((x) => x === 'POST /v1/file_uploads').length, 5);
   assert.equal(rotas.length, 35 * 2 + 2);
-  assert.equal(f.chamadas[iPagina].json.children.length, 31);   // callout + 30
-  assert.equal(f.chamadas[iPatch].json.children.length, 5);
+  assert.equal(f.chamadas[iPagina].json.children.length, 61);   // callout + 30 × (heading_3 + imagem)
+  assert.equal(f.chamadas[iPatch].json.children.length, 10);
   assert.equal(r.publicacao.lotesEnviados, 2);
+});
+
+test('imagem que não pôde ser assada sai do lote sem mudar a contagem de lotes (retomada estável)', async () => {
+  const guia = criarGuia({ titulo: 'Falhas' });
+  for (let i = 0; i < 60; i++) guia.passos.push(criarPasso({ tipo: 'clicar', titulo: `Clique em «${i + 1}»`, captura: { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false } }));
+  // duas janelas de 30 imagens → 2 lotes (61 e 60 blocos de topo); a imagem do passo 3 não existe no armazenamento
+  const f = fetchFalso();
+  const r = await cliente(f).publicarGuia(guia, { paiId: 'pai', obterImagemAssada: async (p) => (p === guia.passos[2] ? null : blobPng(10)) });
+  const pagina = f.chamadas.find((c) => c.rota === '/v1/pages').json;
+  assert.equal(pagina.children.length, 60);                 // o lote de 61 perdeu a imagem sem upload
+  assert.deepEqual(pagina.children.slice(5, 8).map((b) => b.type), ['heading_3', 'heading_3', 'image']);
+  assert.equal(r.publicacao.lotesEnviados, 2);
+  assert.ok(!JSON.stringify(f.chamadas.map((c) => c.json ?? null)).includes('sbs-upload:'));
 });
 
 test('guia sem passos cria a página só com o callout', async () => {

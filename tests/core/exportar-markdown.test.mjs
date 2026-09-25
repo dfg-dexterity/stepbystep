@@ -34,7 +34,8 @@ test('estrutura: título, descrição, numeração que pula seções, imagens s�
   const md = guiaParaMarkdown(guia, { data: DATA_FIXA });
   const linhas = md.split('\n');
   assert.equal(linhas[0], '# Cadastrar fornecedor no SAP Fiori');
-  assert.equal(linhas[2], guia.descricao);
+  assert.equal(linhas[2], '_Diego · 9 passos · ≈ 2 min · 24/09/2026_');   // autor · passos (sem seção) · tempo · data do guia
+  assert.equal(linhas[4], guia.descricao);
   assert.ok(md.includes('\n## 1. Navegue para fiori.empresa.com.br/ui\n'));
   assert.ok(md.includes('\n## 7. Marque «Aceito os termos»\n'));
   assert.ok(md.includes('\n## Conferência no SAP GUI\n'));      // seção sem número
@@ -76,8 +77,9 @@ test('títulos, descrições e alt com [ ] * < saem literais e a imagem continua
   const md = guiaParaMarkdown(g, { data: DATA_FIXA, nomeImagem: (p, i) => (i === 3 ? 'pasta (1)/passo 03.png' : nomeImagemExportada(i + 1)) });
   const linhas = md.split('\n');
   assert.equal(linhas[0], '# Manual \\[beta\\] \\<v2\\>');
-  assert.equal(linhas[2], '\\# não é título');
-  assert.equal(linhas[3], '\\*nem ênfase\\*');
+  assert.match(linhas[2], /^_3 passos · ≈ 1 min · \d{2}\/\d{2}\/\d{4}_$/);
+  assert.equal(linhas[4], '\\# não é título');
+  assert.equal(linhas[5], '\\*nem ênfase\\*');
   assert.ok(md.includes('\n## 1. Clique em «Fechar \\]»\n\n\\- não é lista\n\n![Passo 1 — Clique em «Fechar \\]»](imagens/passo-01.png)\n'));
   assert.ok(md.includes('\n## 2. Clique em «\\<img src=x onerror=alert(1)\\>»\n'));
   assert.ok(md.includes('![Passo 2 — Clique em «\\<img src=x onerror=alert(1)\\>»](imagens/passo-02.png)'));
@@ -93,8 +95,22 @@ test('títulos, descrições e alt com [ ] * < saem literais e a imagem continua
 
 test('guia vazio e sem título', () => {
   const g = criarGuia();
+  delete g.atualizadoEm;   // sem data no guia: a linha de metadados usa a data da exportação
   const md = guiaParaMarkdown(g, { data: DATA_FIXA });
-  assert.equal(md, '# Manual sem título\n\n---\n_Gerado com StepByStep · Dexterity IT Solutions · 24/09/2026_\n');
+  assert.equal(md, '# Manual sem título\n\n_0 passos · ≈ 1 min · 24/09/2026_\n\n---\n_Gerado com StepByStep · Dexterity IT Solutions · 24/09/2026_\n');
   g.passos.push(criarPasso({ tipo: 'secao', titulo: 'Só uma seção', tituloAuto: false, descricao: 'nota' }));
   assert.ok(guiaParaMarkdown(g, { data: DATA_FIXA }).includes('## Só uma seção\n\nnota\n'));
+});
+
+test('notas viram citações com rótulo em negrito, escapadas, depois da descrição e antes da imagem; vazias não saem', () => {
+  const g = criarGuia({ titulo: 'T', autor: 'Ana_Maria' });
+  g.passos.push(criarPasso({ tipo: 'clicar', titulo: 'Clique em «X»', descricao: 'Desc', captura: { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false }, notas: [
+    { id: 'n_m1x4k9zr01n1', tipo: 'dica', texto: 'Use *Ctrl* + [X]' },
+    { id: 'n_m1x4k9zr01n2', tipo: 'atencao', texto: '  ' },
+    { id: 'n_m1x4k9zr01n3', tipo: 'nota', texto: 'Linha 1\n# linha 2\n\nfim' },
+  ] }));
+  const md = guiaParaMarkdown(g, { data: DATA_FIXA });
+  assert.ok(md.includes('_Ana\\_Maria · 1 passo · ≈ 1 min · '), md.slice(0, 80));
+  assert.ok(md.includes('## 1. Clique em «X»\n\nDesc\n\n> **Dica:** Use \\*Ctrl\\* + \\[X\\]\n\n> **Nota:** Linha 1\n> \\# linha 2\n>\n> fim\n\n![Passo 1'), md);
+  assert.ok(!md.includes('Atenção'));
 });

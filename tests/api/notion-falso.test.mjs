@@ -181,8 +181,11 @@ test('publicação completa do guia-exemplo com o cliente real, via proxy, com u
     const blocos = notion.blocos.get(resultado.paginaId);
     assert.equal(blocos[0].type, 'callout');
     assert.equal(blocos.filter((b) => b.type === 'heading_2').length, 1);
-    assert.equal(blocos.filter((b) => b.type === 'numbered_list_item').length, guia.passos.length - 1);
-    const imagens = blocos.flatMap((b) => b._filhos).filter((b) => b.type === 'image');
+    assert.equal(blocos.filter((b) => b.type === 'heading_3').length, guia.passos.length - 1);
+    // resumo no topo + um callout por nota (dica, atenção, nota)
+    assert.deepEqual(blocos.filter((b) => b.type === 'callout').map((b) => b.callout.icon.emoji), ['📘', '💡', '⚠️', '📝']);
+    assert.ok(blocos.every((b) => b._filhos.length === 0), 'nenhum bloco aninhado');
+    const imagens = blocos.filter((b) => b.type === 'image');
     assert.equal(imagens.length, comImagem.length);
     assert.ok(imagens.every((b) => notion.uploads.get(b.image.file_upload.id)?.status === 'uploaded'));
 

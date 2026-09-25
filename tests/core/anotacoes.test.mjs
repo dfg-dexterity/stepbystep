@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizarAnotacoes, separarRecorte, areaSaida, pontaDaSeta, bboxDaAnotacao, hitTest, moverAnotacao, anotacoesAutomaticas,
+  normalizarAnotacoes, separarRecorte, areaSaida, areaEfetiva, pontaDaSeta, bboxDaAnotacao, hitTest, moverAnotacao, anotacoesAutomaticas,
 } from '../../packages/core/anotacoes.js';
 import { medidas } from '../../packages/core/render-canvas.js';
 import { validarId } from '../../packages/core/ids.js';
+import { recorteFocado } from '../../packages/core/coordenadas.js';
 import { lerFixture } from './util.mjs';
 
 const semIds = (lista) => lista.map(({ id, ...resto }) => resto);
@@ -143,4 +144,40 @@ test('anotacoesAutomaticas: bbox null, w 0, captura faltante ou sem escala', () 
     { tipo: 'retangulo', auto: true, x: 0, y: 0, w: 100, h: 28, cor: 'cerceta' },
     { tipo: 'marcador', auto: true, x: 84, y: 16, numero: 4, cor: 'cerceta' },
   ]);
+});
+
+test('areaEfetiva: recorte manual manda; senão zoom no alvo (padrão), com override por passo; sem alvo ou «tela» → imagem inteira', () => {
+  const g = lerFixture('guia-exemplo');
+  const imagem = { largura: 2880, altura: 1620 };
+  const inteira = { x: 0, y: 0, w: 2880, h: 1620 };
+  const clique = g.passos[1];                                     // alvo 2540,292 144×52, sem recorte
+  const focado = recorteFocado(clique.alvo.bbox, imagem, { escala: 2 });
+  // guia antigo (estilo sem zoom) = 'alvo': vale para o que já foi gravado, sem tocar no guia
+  assert.deepEqual(areaEfetiva(clique, imagem, g.estilo), focado);
+  assert.deepEqual(areaEfetiva(clique, imagem, undefined), focado);
+  assert.deepEqual(areaEfetiva(clique, imagem, { ...g.estilo, zoom: 'alvo' }), focado);
+  assert.deepEqual(areaEfetiva(clique, imagem, { ...g.estilo, zoom: 'tela' }), inteira);
+  // override do passo vence o guia; null herda
+  assert.deepEqual(areaEfetiva({ ...clique, zoom: 'tela' }, imagem, { zoom: 'alvo' }), inteira);
+  assert.deepEqual(areaEfetiva({ ...clique, zoom: 'alvo' }, imagem, { zoom: 'tela' }), focado);
+  assert.deepEqual(areaEfetiva({ ...clique, zoom: null }, imagem, { zoom: 'tela' }), inteira);
+  // o retângulo e o marcador automáticos ficam dentro da área ampliada
+  const [ret, marc] = clique.anotacoes;
+  assert.ok(ret.x >= focado.x && ret.y >= focado.y && ret.x + ret.w <= focado.x + focado.w && ret.y + ret.h <= focado.y + focado.h, JSON.stringify(focado));
+  const raio = medidas(clique).raioMarcador + 3 * 2;
+  assert.ok(marc.x + raio <= focado.x + focado.w && marc.y - raio >= focado.y, 'marcador inteiro na área');
+  // recorte explícito manda, mesmo com zoom 'alvo' (e é limitado à imagem como areaSaida)
+  const digitar = g.passos[2];
+  assert.deepEqual(areaEfetiva(digitar, imagem, { zoom: 'alvo' }), { x: 400, y: 400, w: 1600, h: 800 });
+  assert.deepEqual(areaEfetiva({ ...digitar, zoom: 'tela' }, imagem, {}), { x: 400, y: 400, w: 1600, h: 800 });
+  // sem alvo (navegar, tecla), bbox nulo, vazio ou fora da imagem → inteira
+  assert.deepEqual(areaEfetiva(g.passos[0], imagem, {}), inteira);
+  assert.deepEqual(areaEfetiva(g.passos[4], imagem, {}), inteira);
+  assert.deepEqual(areaEfetiva({ ...clique, alvo: { ...clique.alvo, bbox: null } }, imagem, {}), inteira);
+  assert.deepEqual(areaEfetiva({ ...clique, alvo: { ...clique.alvo, bbox: { x: 10, y: 10, w: 0, h: 5 } } }, imagem, {}), inteira);
+  assert.deepEqual(areaEfetiva({ ...clique, alvo: { ...clique.alvo, bbox: { x: 5000, y: 10, w: 20, h: 20 } } }, imagem, {}), inteira);
+  // a área fica sempre dentro da imagem, perto das bordas também
+  const canto = areaEfetiva({ ...clique, alvo: { ...clique.alvo, bbox: { x: 2860, y: 1600, w: 20, h: 20 } } }, imagem, {});
+  assert.ok(canto.x >= 0 && canto.y >= 0 && canto.x + canto.w <= 2880 && canto.y + canto.h <= 1620, JSON.stringify(canto));
+  assert.ok(canto.w < 2880);
 });

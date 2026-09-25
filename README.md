@@ -102,7 +102,13 @@ Hospedado: <https://stepbystep-dexterity.vercel.app/editor/>. Na extensão: íco
   reordenar, editar, excluir, inserir passo manual ou seção, duplicar, mesclar com o anterior, regerar título);
   no centro a imagem com as ferramentas **Selecionar (V)**, **Recorte (C)** (com "Focar no alvo" e "Recortar à
   janela"), **Desfoque (B)**, **Retângulo (R)**, **Seta (A)**, **Marcador (M)**, **Texto (T)**; à direita o
-  painel do passo (título, descrição, tipo, metadados, anotações, estilo do guia).
+  painel do passo (título, descrição, tipo, **dicas e alertas**, enquadramento da imagem, metadados, anotações,
+  estilo do guia).
+- **Zoom no alvo** (padrão): a imagem exportada é ampliada ao redor do elemento clicado, com o destaque e o
+  marcador visíveis, sem alterar a captura. Por passo dá para escolher «Tela inteira» (ou mudar o padrão do guia);
+  um recorte manual sempre manda. Vale também para guias antigos.
+- **Dicas e alertas**: caixas de *Dica* (cerceta), *Atenção* (âmbar) e *Nota* (roxo) por passo, com um indicador
+  colorido no cartão da lista.
 - Desfazer/Refazer: Ctrl/⌘+Z, Ctrl/⌘+Shift+Z. Salvamento automático. A 390 px as colunas viram abas.
 
 Os guias ficam no navegador; nada sai da máquina sem uma exportação ou publicação explícita.
@@ -116,15 +122,25 @@ da página de teste `tests/fixtures/paginas/formulario.html`:
 |---|---|---|
 | ![Biblioteca](docs/capturas/editor-biblioteca.png) | ![Editor](docs/capturas/editor-guia.png) | ![Editor a 390 px](docs/capturas/editor-390.png) |
 
+Guia exportado (HTML, fixture `guia-exemplo`) e o painel de dicas/enquadramento do editor:
+
+| HTML exportado (1280 px) | HTML exportado a 390 px | Dicas e enquadramento |
+|---|---|---|
+| ![Guia exportado](docs/capturas/guia-exportado.png) | ![Guia exportado a 390 px](docs/capturas/guia-exportado-390.png) | ![Editor com dicas](docs/capturas/editor-dicas.png) |
+
 ## Exportações
+
+Todas as exportações seguem o mesmo roteiro de workflow: cabeçalho com **autor · nº de passos · tempo estimado ·
+data**, uma frase curta por passo com o alvo em negrito, as caixas de dica/atenção/nota e a imagem **ampliada no
+alvo** (área efetiva: recorte manual › zoom no alvo › tela inteira).
 
 | Formato | Conteúdo |
 |---|---|
 | `.stepbystep.zip` | Intercâmbio/backup: `guide.json` + PNGs **originais** (sem anotações). Reimportável no editor. |
-| Markdown + imagens (zip) | `README.md` com `# Título`, `## n. Passo` e `![…](imagens/passo-NN.png)`; imagens **assadas** com as anotações (opção "reduzir a 1x"). Cola direto em wiki, Git ou Confluence. |
-| HTML autocontido | Um arquivo com CSS Dexterity inline e imagens em `data:` — abre em qualquer navegador, sem rede. |
-| Imprimir / salvar PDF | Abre o HTML e chama a impressão (A4, margem 15 mm, um passo nunca quebra no meio da página). |
-| Notion | Página nova na página-mãe escolhida, com imagens hospedadas no Notion. |
+| Markdown + imagens (zip) | `README.md` com `# Título`, linha de metadados, `## n. Passo`, notas em citação (`> **Dica:** …`) e `![…](imagens/passo-NN.png)`; imagens **assadas** com as anotações (opção "reduzir a 1x"). Cola direto em wiki, Git ou Confluence. |
+| HTML autocontido | Um arquivo com CSS Dexterity inline e imagens em `data:` — um cartão por passo (número grande em cerceta, caixas coloridas, imagem com fio de 1 px); abre em qualquer navegador, sem rede, e se ajusta a 390 px. |
+| Imprimir / salvar PDF | Abre o HTML e chama a impressão (A4, margem 15 mm, fundo branco; um cartão nunca quebra no meio da página). |
+| Notion | Página nova na página-mãe escolhida: callout 📘 com o resumo, `heading_3` "n. título" por passo, um callout por nota (💡 verde, ⚠️ laranja, 📝 roxo) e a imagem hospedada no Notion. |
 
 ## Notion
 
