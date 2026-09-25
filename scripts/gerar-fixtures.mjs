@@ -69,6 +69,9 @@ export const GUIA_EXEMPLO = {
         { id: 'a_m1x4k9zr02a1', tipo: 'retangulo', auto: true, x: 2524, y: 276, w: 176, h: 84, cor: 'cerceta' },
         { id: 'a_m1x4k9zr02a2', tipo: 'marcador', auto: true, x: 2700, y: 276, numero: 2, cor: 'cerceta' },
       ],
+      notas: [
+        { id: 'n_m1x4k9zr02n1', tipo: 'dica', texto: 'O botão fica no canto superior direito da lista de parceiros.' },
+      ],
     },
     {
       id: 'p_m1x4k9zr03ac',
@@ -106,6 +109,9 @@ export const GUIA_EXEMPLO = {
         { id: 'a_m1x4k9zr05a1', tipo: 'desfoque', auto: true, x: 700, y: 772, w: 800, h: 56, bloco: 16 },
         { id: 'a_m1x4k9zr05a2', tipo: 'retangulo', auto: true, x: 684, y: 756, w: 832, h: 88, cor: 'cerceta' },
         { id: 'a_m1x4k9zr05a3', tipo: 'marcador', auto: true, x: 1516, y: 756, numero: 4, cor: 'cerceta' },
+      ],
+      notas: [
+        { id: 'n_m1x4k9zr05n1', tipo: 'atencao', texto: 'Nunca compartilhe sua senha: o campo sai desfocado no manual.' },
       ],
     },
     {
@@ -191,6 +197,9 @@ export const GUIA_EXEMPLO = {
       descricao: 'O sistema envia o número do parceiro em até 5 minutos.',
       criadoEm: '2026-09-24T14:20:00.000Z',
       contexto: null, evento: null, alvo: null, captura: null, resultado: null, anotacoes: [],
+      notas: [
+        { id: 'n_m1x4k9zr11n1', tipo: 'nota', texto: 'Se o e-mail não chegar, confira a caixa de spam.' },
+      ],
     },
   ],
   imagens: {

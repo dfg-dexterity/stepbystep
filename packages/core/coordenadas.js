@@ -62,13 +62,15 @@ export function posicaoMarcador(bbox, imagem, raio) {
 }
 
 /**
- * Recorte "focar no alvo": ao redor do bbox, largura ≥ max(40 % da imagem, bbox.w + 2·margem), proporção 16:10, dentro da imagem.
+ * Recorte "focar no alvo": ao redor do bbox, proporção 16:10, dentro da imagem, com largura ≥ max(40 % da largura,
+ * bbox.w + 2·margem) e altura ≥ 40 % da altura da imagem (em telas mais altas que 16:10 — retrato, celular — só 40 %
+ * da largura daria uma faixa fina demais para situar o alvo).
  * @param {{margem?:number, escala?:number}} [opcoes] margem padrão 120·escala (escala padrão 1) @returns {Rect}
  */
 export function recorteFocado(bbox, imagem, opcoes = {}) {
   const margem = opcoes.margem ?? 120 * (opcoes.escala ?? 1);
   const W = imagem.largura, H = imagem.altura;
-  let w = Math.max(0.4 * W, bbox.w + 2 * margem);
+  let w = Math.max(0.4 * W, 0.4 * H * 16 / 10, bbox.w + 2 * margem);
   let h = w * 10 / 16;
   if (h < bbox.h + 2 * margem) { h = bbox.h + 2 * margem; w = h * 16 / 10; }
   // cabe na imagem mantendo a proporção sempre que possível

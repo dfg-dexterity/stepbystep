@@ -38,9 +38,21 @@ function cabecalhosCors(origem) {
 
 const json = (corpo, status, cors) => new Response(JSON.stringify(corpo), { status, headers: { ...cors, 'content-type': 'application/json' } });
 
+/**
+ * Rota do Notion pedida. Funções soltas da Vercel não têm catch-all (`[...x].js` é só do
+ * Next.js), então o vercel.json reescreve /api/notion/:caminho* para /api/notion?rota=/:caminho*.
+ * Aceita as duas formas: o caminho original (dev-server, testes e plataformas que preservam
+ * a URL) e o parâmetro `rota` do rewrite. Qualquer valor passa pela allow-list ROTAS.
+ */
+function rotaDe(url) {
+  const peloCaminho = url.pathname.replace(/^\/api\/notion(\.js)?/, '');
+  if (peloCaminho) return peloCaminho;
+  return url.searchParams.get('rota') ?? '';
+}
+
 async function handler(request) {
   const url = new URL(request.url);
-  const rota = url.pathname.replace(/^\/api\/notion/, '');
+  const rota = rotaDe(url);
   const cors = cabecalhosCors(request.headers.get('origin') ?? '');
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   if (!METODOS.has(request.method) || !ROTAS.test(rota)) return json({ erro: 'Rota não permitida' }, 403, cors);

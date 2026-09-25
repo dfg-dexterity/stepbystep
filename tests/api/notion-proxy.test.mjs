@@ -1,10 +1,10 @@
-// Proxy api/notion/[...rota].js chamado como handler Web (Request → Response), com
+// Proxy api/notion.js chamado como handler Web (Request → Response), com
 // NOTION_BASE apontando para o Notion falso (scripts/notion-falso.mjs).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { iniciarNotionFalso, PAGINAS_INICIAIS } from '../../scripts/notion-falso.mjs';
-import * as proxy from '../../api/notion/[...rota].js';
+import * as proxy from '../../api/notion.js';
 
 const { GET, POST, PATCH, OPTIONS } = proxy;
 const handler = GET;
@@ -107,6 +107,31 @@ test('GET /v1/users/me repassa só authorization, notion-version e content-type'
   for (const proibido of ['cookie', 'x-forwarded-for', 'origin']) {
     assert.ok(!reg.nomesCabecalhos.includes(proibido), `${proibido} não deve chegar ao Notion`);
   }
+});
+
+test('forma reescrita pela Vercel (/api/notion?rota=…) passa pela mesma allow-list', async () => {
+  // funções soltas da Vercel não têm catch-all: o vercel.json reescreve /api/notion/:caminho* para cá
+  const reescrita = (rota, init = {}) => {
+    const headers = new Headers(init.headers ?? {});
+    headers.set('origin', EDITOR);
+    return new Request(`https://stepbystep-dexterity.vercel.app/api/notion?rota=${encodeURIComponent(rota)}`, { ...init, headers });
+  };
+  let r = await handler(reescrita('/v1/users/me', { method: 'GET', headers: autenticado() }));
+  assert.equal(r.status, 200);
+  assert.equal(notion.registros.at(-1).rota, '/v1/users/me');
+  r = await handler(reescrita('/v1/databases', { method: 'POST', headers: autenticado() }));
+  assert.equal(r.status, 403);
+  r = await handler(reescrita('https://outro.host/v1/users/me', { method: 'GET', headers: autenticado() }));
+  assert.equal(r.status, 403, 'o parâmetro rota nunca vira host');
+  r = await handler(new Request('https://stepbystep-dexterity.vercel.app/api/notion', { method: 'GET', headers: autenticado() }));
+  assert.equal(r.status, 403, 'sem caminho nem rota');
+});
+
+test('vercel.json reescreve /api/notion/* para a função api/notion.js', async () => {
+  const { readFile, access } = await import('node:fs/promises');
+  const config = JSON.parse(await readFile(new URL('../../vercel.json', import.meta.url), 'utf8'));
+  assert.ok(config.rewrites.some((r) => r.source === '/api/notion/:caminho*' && r.destination === '/api/notion?rota=/:caminho*'));
+  await access(new URL('../../api/notion.js', import.meta.url));
 });
 
 test('erros do Notion (401 sem token, 400 sem versão) passam intactos com o corpo original', async () => {

@@ -30,8 +30,8 @@ test('medidas proporcionais à escala', () => {
   assert.equal(m.hasteSeta, 8);
   assert.equal(m.pontaSeta, 32);
   assert.equal(m.tamanhoTexto, 32);
-  assert.equal(m.fonteMarcador, '600 40px "Barlow Condensed"');
-  assert.equal(m.fonteTexto(32), '600 32px Figtree');
+  assert.equal(m.fonteMarcador, '600 40px "Barlow Condensed", "Arial Narrow", sans-serif');
+  assert.equal(m.fonteTexto(32), '600 32px Figtree, system-ui, sans-serif');
   assert.equal(medidas({ captura: null }).e, 1);
   assert.equal(medidas({}).espessuraRect, 3);
 });
@@ -122,7 +122,7 @@ test('geometria proporcional à escala da captura', () => {
   const larguras = ctx.chamadas.filter((c) => c[0] === 'set' && c[1] === 'lineWidth').map((c) => c[2]);
   assert.deepEqual(larguras, [6, 8, 4, 2]);   // retângulo 3e, haste 4e, anel 2e, fio 1e (e = 2)
   const fontes = ctx.chamadas.filter((c) => c[0] === 'set' && c[1] === 'font').map((c) => c[2]);
-  assert.deepEqual(fontes, ['600 32px Figtree', '600 40px "Barlow Condensed"']);
+  assert.deepEqual(fontes, ['600 32px Figtree, system-ui, sans-serif', '600 40px "Barlow Condensed", "Arial Narrow", sans-serif']);
   // texto: fundo off medido pelo measureText (10 px/char) com folga 8, depois o texto
   const fills = ctx.chamadas.filter((c) => c[0] === 'fillRect');
   assert.deepEqual(fills[1], ['fillRect', 1710 - 8, 920 - 8, 120 + 16, 40 + 16]);
@@ -178,4 +178,22 @@ test('passo sem anotações e sem criarCanvas só desenha a imagem', () => {
   const ctx2 = criarCtxFalso();
   desenharPasso(ctx2, IMAGEM, { captura: { escala: 2 }, anotacoes: [{ id: 'a_m1x4k9zr02a1', tipo: 'desfoque', auto: true, x: 0, y: 0, w: 10, h: 10, bloco: 8 }] }, {});
   assert.deepEqual(metodos(ctx2), ['save', 'scale', 'translate', 'drawImage', 'restore']);
+});
+
+test('sem recorte, o enquadramento vem de areaEfetiva: zoom no alvo por padrão, «tela» no estilo ou no passo mostra tudo', () => {
+  const g = lerFixture('guia-exemplo');
+  const clique = g.passos[1];
+  const translate = (opcoes, passo = clique) => {
+    const ctx = criarCtxFalso();
+    const area = desenharPasso(ctx, IMAGEM, passo, { escala: 1, ...opcoes });
+    return { area, t: ctx.chamadas.find((c) => c[0] === 'translate'), holofote: ctx.chamadas.find((c) => c[0] === 'fillRect') };
+  };
+  const alvo = translate({ estilo: g.estilo });
+  assert.deepEqual(alvo.area, { x: 1728, y: 0, w: 1152, h: 720 });   // recorteFocado do botão «Criar», encostado no canto
+  assert.deepEqual(alvo.t, ['translate', -1728, -0]);
+  assert.deepEqual(alvo.holofote, ['fillRect', 1728, 0, 1152, 720]);  // holofote só na área visível
+  assert.deepEqual(translate({ estilo: { ...g.estilo, zoom: 'tela' } }).area, { x: 0, y: 0, w: 2880, h: 1620 });
+  assert.deepEqual(translate({ estilo: g.estilo }, { ...clique, zoom: 'tela' }).area, { x: 0, y: 0, w: 2880, h: 1620 });
+  // incluirRecorte:false (ferramenta de recorte no editor) mostra a imagem inteira
+  assert.deepEqual(translate({ estilo: g.estilo, incluirRecorte: false }).area, { x: 0, y: 0, w: 2880, h: 1620 });
 });

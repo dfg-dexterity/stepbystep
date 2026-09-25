@@ -14,6 +14,12 @@ export const TOKENS_COR = ['cerceta', 'ambar', 'roxo', 'base', 'off'];
 export const ESTADOS_GUIA = ['gravando', 'interrompido', 'concluido'];
 export const ORIGENS = ['extensao', 'mac', 'manual'];
 export const FONTES_CAPTURA = ['pointerdown', 'confirmacao', 'navegacao', 'compartilhada', 'manual'];
+// Enquadramento da imagem exportada: 'alvo' = zoom automático no alvo do passo; 'tela' = captura inteira.
+export const ZOOMS = ['alvo', 'tela'];
+export const ZOOM_PADRAO = 'alvo';
+// Caixas de dica/alerta do passo (cerceta, âmbar e roxo na exportação).
+export const TIPOS_NOTA = ['dica', 'atencao', 'nota'];
+export const NOMES_NOTA = { dica: 'Dica', atencao: 'Atenção', nota: 'Nota' };
 
 const agoraIso = () => new Date().toISOString();
 
@@ -36,7 +42,7 @@ export function criarGuia(o = {}) {
     criadoEm: agora,
     atualizadoEm: agora,
     origem: { tipo: tipoOrigem, versao: o.origem?.versao ?? null, plataforma: o.origem?.plataforma ?? null },
-    estilo: { cor: 'cerceta', escurecerFora: true },
+    estilo: { cor: 'cerceta', escurecerFora: true, zoom: ZOOM_PADRAO },
     estado: tipoOrigem === 'manual' ? 'concluido' : 'gravando',
     publicacoes: [],
     passos: [],
@@ -44,8 +50,8 @@ export function criarGuia(o = {}) {
 }
 
 /**
- * @param {{tipo:string, titulo?:string, tituloAuto?:boolean, descricao?:string, contexto?:object|null, evento?:object|null, alvo?:object|null, captura?:object|null, resultado?:object|null, anotacoes?:object[]}} o
- * @returns {object} passo com id 'p_…', criadoEm agora; titulo '' e tituloAuto true por padrão
+ * @param {{tipo:string, titulo?:string, tituloAuto?:boolean, descricao?:string, contexto?:object|null, evento?:object|null, alvo?:object|null, captura?:object|null, resultado?:object|null, anotacoes?:object[], notas?:object[], zoom?:'alvo'|'tela'|null}} o
+ * @returns {object} passo com id 'p_…', criadoEm agora; titulo '' e tituloAuto true por padrão; notas [] e zoom só quando informado
  */
 export function criarPasso(o) {
   if (!o || !TIPOS_PASSO.includes(o.tipo)) throw new Error(`Tipo de passo inválido: ${o?.tipo}`);
@@ -62,7 +68,27 @@ export function criarPasso(o) {
     captura: o.captura ?? null,
     resultado: o.resultado ?? null,
     anotacoes: Array.isArray(o.anotacoes) ? o.anotacoes.map((a) => ({ ...a })) : [],
+    notas: Array.isArray(o.notas) ? o.notas.map((n) => ({ ...n })) : [],
+    ...(ZOOMS.includes(o.zoom) ? { zoom: o.zoom } : {}),
   };
+}
+
+/** @param {'dica'|'atencao'|'nota'} tipo @param {string} [texto] @returns {object} nota com id 'n_…' */
+export function criarNota(tipo, texto = '') {
+  if (!TIPOS_NOTA.includes(tipo)) throw new Error(`Tipo de nota inválido: ${tipo}`);
+  return { id: gerarId('n'), tipo, texto: String(texto ?? '') };
+}
+
+/** Notas exportáveis do passo: tipo conhecido e texto não vazio (as vazias ficam só no editor, em edição). @returns {object[]} */
+export function notasDoPasso(passo) {
+  return (Array.isArray(passo?.notas) ? passo.notas : [])
+    .filter((n) => n && TIPOS_NOTA.includes(n.tipo) && typeof n.texto === 'string' && n.texto.trim() !== '');
+}
+
+/** Enquadramento efetivo do passo: o do passo ('alvo'|'tela') ou, sem ele (null/ausente), o padrão do guia (ausente = 'alvo'). */
+export function zoomDoPasso(passo, estilo) {
+  if (ZOOMS.includes(passo?.zoom)) return passo.zoom;
+  return ZOOMS.includes(estilo?.zoom) ? estilo.zoom : ZOOM_PADRAO;
 }
 
 /** @param {string} tipo @param {object} props @returns {object} anotação com id 'a_…', auto false por padrão, cor 'cerceta' por padrão */
@@ -128,6 +154,7 @@ export function validarGuia(obj) {
     else {
       if (!TOKENS_COR.includes(obj.estilo.cor)) erro('estilo.cor', `deve ser um token de cor (${TOKENS_COR.join(', ')})`);
       if (typeof obj.estilo.escurecerFora !== 'boolean') erro('estilo.escurecerFora', 'deve ser booleano');
+      if (obj.estilo.zoom !== undefined && !ZOOMS.includes(obj.estilo.zoom)) erro('estilo.zoom', `deve ser um de ${ZOOMS.join(', ')}`);
     }
   }
   if (!ESTADOS_GUIA.includes(obj.estado)) erro('estado', `deve ser um de ${ESTADOS_GUIA.join(', ')}`);
@@ -175,6 +202,19 @@ function validarPasso(p, c, erro, registrarId) {
   if (p.contexto !== null && p.contexto !== undefined && !ehObjeto(p.contexto)) erro(`${c}.contexto`, 'deve ser objeto ou null');
   if (p.evento !== null && p.evento !== undefined && !ehObjeto(p.evento)) erro(`${c}.evento`, 'deve ser objeto ou null');
   if (p.resultado !== null && p.resultado !== undefined && !ehObjeto(p.resultado)) erro(`${c}.resultado`, 'deve ser objeto ou null');
+  if (p.zoom !== null && p.zoom !== undefined && !ZOOMS.includes(p.zoom)) erro(`${c}.zoom`, `deve ser ${ZOOMS.join(', ')} ou null`);
+
+  // notas (dica/atenção/nota): opcionais; ausente = []
+  if (p.notas !== undefined) {
+    if (!Array.isArray(p.notas)) erro(`${c}.notas`, 'deve ser uma lista');
+    else p.notas.forEach((n, j) => {
+      const cn = `${c}.notas[${j}]`;
+      if (!ehObjeto(n)) { erro(cn, 'deve ser um objeto'); return; }
+      registrarId(`${cn}.id`, n.id, 'n');
+      if (!TIPOS_NOTA.includes(n.tipo)) erro(`${cn}.tipo`, `deve ser um de ${TIPOS_NOTA.join(', ')}`);
+      if (typeof n.texto !== 'string' || n.texto.trim() === '') erro(`${cn}.texto`, 'deve ser texto não vazio');
+    });
+  }
 
   // alvo
   if (p.alvo !== null && p.alvo !== undefined) {
@@ -284,6 +324,25 @@ export function migrarGuia(obj) {
     p.anotacoes ??= [];
   }
   return guia;
+}
+
+/** Segundos estimados por tipo de passo (heurística do tempo de leitura + execução do resumo). */
+export const SEGUNDOS_POR_TIPO = { navegar: 5, clicar: 5, marcar: 6, selecionar: 6, digitar: 10, tecla: 3, manual: 15, secao: 0 };
+
+/**
+ * Resumo do cabeçalho das exportações: passos numerados (sem seções), tempo estimado em minutos
+ * (soma de SEGUNDOS_POR_TIPO, arredondada para cima, mínimo 1), autor e data (atualizadoEm).
+ * @param {object} guia @returns {{passos:number, minutos:number, autor:string, data:string|null}}
+ */
+export function resumoDoGuia(guia) {
+  const passos = (guia?.passos ?? []).filter((p) => p && p.tipo !== 'secao');
+  const segundos = passos.reduce((s, p) => s + (SEGUNDOS_POR_TIPO[p.tipo] ?? 5), 0);
+  return {
+    passos: passos.length,
+    minutos: Math.max(1, Math.ceil(segundos / 60)),
+    autor: typeof guia?.autor === 'string' ? guia.autor.trim() : '',
+    data: typeof guia?.atualizadoEm === 'string' && guia.atualizadoEm ? guia.atualizadoEm : null,
+  };
 }
 
 /** structuredClone sem o campo imagens. */

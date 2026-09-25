@@ -1,9 +1,9 @@
 // Desenho de um passo (imagem + anotações) num contexto 2D injetado. Função pura: não cria canvas.
-// O chamador dimensiona ctx.canvas para areaSaida × escala e, no navegador, espera as fontes carregarem.
+// O chamador dimensiona ctx.canvas para areaEfetiva × escala e, no navegador, espera as fontes carregarem.
 import { CORES } from './modelo.js';
-import { separarRecorte, areaSaida, pontaDaSeta, caixaTexto } from './anotacoes.js';
+import { separarRecorte, areaEfetiva, pontaDaSeta, caixaTexto } from './anotacoes.js';
 
-const ESTILO_PADRAO = { cor: 'cerceta', escurecerFora: true };
+const ESTILO_PADRAO = { cor: 'cerceta', escurecerFora: true, zoom: 'alvo' };
 const corDe = (token) => CORES[token] ?? CORES.cerceta;
 
 /**
@@ -19,8 +19,8 @@ export function medidas(passo) {
     hasteSeta: 4 * e,
     pontaSeta: 16 * e,
     tamanhoTexto: 16 * e,
-    fonteMarcador: `600 ${20 * e}px "Barlow Condensed"`,
-    fonteTexto: (t) => `600 ${t}px Figtree`,
+    fonteMarcador: `600 ${20 * e}px "Barlow Condensed", "Arial Narrow", sans-serif`,   // genérica: nunca cai na serifada padrão
+    fonteTexto: (t) => `600 ${t}px Figtree, system-ui, sans-serif`,
   };
 }
 
@@ -144,17 +144,22 @@ function desenharMarcador(ctx, a, m, estilo) {
 /**
  * Desenha imagem + anotações. Ordem: save → scale → translate(−area) → drawImage → desfoques → holofote
  * → retângulos → setas → textos → marcadores → restore.
+ * A área é areaEfetiva(passo, imagem, estilo): recorte explícito, senão zoom no alvo (estilo.zoom / passo.zoom),
+ * senão a imagem inteira. `incluirRecorte: false` mostra a imagem inteira (ferramenta de recorte no editor).
  * @param {object} ctx contexto 2D (real ou falso)
  * @param {{largura:number, altura:number, fonte:any}} imagem bitmap original
  * @param {object} passo
- * @param {{escala?:number, estilo?:{cor:string, escurecerFora:boolean}, criarCanvas?:(w:number,h:number)=>{getContext:Function}, incluirRecorte?:boolean}} opcoes
+ * @param {{escala?:number, estilo?:{cor:string, escurecerFora:boolean, zoom?:'alvo'|'tela'}, criarCanvas?:(w:number,h:number)=>{getContext:Function}, incluirRecorte?:boolean}} opcoes
+ * @returns {{x,y,w,h}} área desenhada (px da imagem)
  */
 export function desenharPasso(ctx, imagem, passo, opcoes = {}) {
   const escala = opcoes.escala > 0 ? opcoes.escala : 1;
   const estilo = { ...ESTILO_PADRAO, ...(opcoes.estilo ?? {}) };
   const m = medidas(passo);
-  const { recorte, demais } = separarRecorte(passo.anotacoes ?? []);
-  const area = opcoes.incluirRecorte === false ? areaSaida(imagem, null) : areaSaida(imagem, recorte);
+  const { demais } = separarRecorte(passo.anotacoes ?? []);
+  const area = opcoes.incluirRecorte === false
+    ? { x: 0, y: 0, w: imagem.largura, h: imagem.altura }
+    : areaEfetiva(passo, imagem, estilo);
   const por = (tipo) => demais.filter((a) => a.tipo === tipo);
 
   ctx.save();
@@ -177,7 +182,7 @@ export function desenharPasso(ctx, imagem, passo, opcoes = {}) {
 }
 
 /**
- * Navegador: OffscreenCanvas(areaSaida × escalaSaida), desenharPasso, convertToBlob.
+ * Navegador: OffscreenCanvas(areaEfetiva × escalaSaida), desenharPasso, convertToBlob.
  * @param {ImageBitmap} bitmap @param {object} passo
  * @param {{larguraMax?:number, tipo?:'image/png'|'image/webp', qualidade?:number, estilo?:object}} [opcoes]
  * @returns {Promise<{blob:Blob, largura:number, altura:number}>}
@@ -185,8 +190,7 @@ export function desenharPasso(ctx, imagem, passo, opcoes = {}) {
 export async function assarPasso(bitmap, passo, opcoes = {}) {
   if (typeof OffscreenCanvas === 'undefined') throw new Error('assarPasso exige OffscreenCanvas (só navegador)');
   const imagem = { largura: bitmap.width, altura: bitmap.height, fonte: bitmap };
-  const { recorte } = separarRecorte(passo.anotacoes ?? []);
-  const area = areaSaida(imagem, recorte);
+  const area = areaEfetiva(passo, imagem, { ...ESTILO_PADRAO, ...(opcoes.estilo ?? {}) });
   const escala = opcoes.larguraMax > 0 && area.w > opcoes.larguraMax ? opcoes.larguraMax / area.w : 1;
   const largura = Math.max(1, Math.round(area.w * escala));
   const altura = Math.max(1, Math.round(area.h * escala));

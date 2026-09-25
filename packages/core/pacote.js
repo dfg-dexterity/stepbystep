@@ -1,6 +1,6 @@
 // Pacote .stepbystep.zip / pasta: guide.json (com `imagens`) + PNGs originais.
 import { criarZip } from './zip.js';
-import { migrarGuia, validarGuia } from './modelo.js';
+import { migrarGuia, validarGuia, notasDoPasso } from './modelo.js';
 
 export const NOME_GUIDE = 'guide.json';
 export const PASTA_IMAGENS = 'imagens/';
@@ -22,7 +22,7 @@ export function imagensDoGuia(guia) {
 }
 
 /**
- * Serializa guide.json (com `imagens`) + PNGs originais.
+ * Serializa guide.json (com `imagens`) + PNGs originais. Notas sem texto são descartadas.
  * @param {object} guia @param {(imagemId:string)=>Promise<{bytes:Uint8Array, largura:number, altura:number, mime:string}|null>} obterImagem
  * @returns {Promise<Uint8Array>} zip
  */
@@ -37,6 +37,10 @@ export async function guiaParaPacote(guia, obterImagem) {
     const arquivo = caminhoImagem(id, mime);
     imagens[id] = { arquivo, largura: img.largura, altura: img.altura, mime };
     entradas.push({ nome: arquivo, dados: img.bytes });
+  }
+  // notas vazias (em edição no editor) não entram: o guide.json precisa passar em validarGuia na volta
+  if (Array.isArray(semImagens.passos)) {
+    semImagens.passos = semImagens.passos.map((p) => (Array.isArray(p?.notas) ? { ...p, notas: notasDoPasso(p) } : p));
   }
   const texto = JSON.stringify({ ...semImagens, imagens }, null, 2) + '\n';
   return criarZip([{ nome: NOME_GUIDE, dados: new TextEncoder().encode(texto) }, ...entradas]);

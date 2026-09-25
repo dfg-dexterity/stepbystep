@@ -23,7 +23,7 @@ tudo no **editor** (reordenar, mesclar, recortar, desfocar dados sensíveis, set
 | Extensão Chrome MV3 | `packages/extensao/` | Captura no navegador: barra flutuante, sensor de eventos, service worker, popup. Carrega `core/` e `editor/` copiados por `npm run sincronizar`. |
 | Editor web | `packages/editor/` | Biblioteca de guias e editor (sem build). Hospedado em <https://stepbystep-dexterity.vercel.app/editor/> e embutido na extensão. |
 | App Mac | `packages/mac/` | Menu bar em Swift (macOS 14+): captura o display inteiro, lê Acessibilidade/OCR e grava uma pasta que o editor importa. |
-| API | `api/` | `notion/[...rota].js` (proxy allow-list para a API do Notion, usado só pelo editor hospedado) e `hash.js` (integridade da publicação). |
+| API | `api/` | `notion.js` (proxy allow-list para a API do Notion, usado só pelo editor hospedado) e `hash.js` (integridade da publicação). |
 
 Um único formato de guia (`guide.json` v1 + PNGs originais) atravessa tudo: extensão, Mac, inserção manual e
 editor. Todas as coordenadas são em pixels da imagem original; anotações são não destrutivas (o original é
@@ -102,7 +102,13 @@ Hospedado: <https://stepbystep-dexterity.vercel.app/editor/>. Na extensão: íco
   reordenar, editar, excluir, inserir passo manual ou seção, duplicar, mesclar com o anterior, regerar título);
   no centro a imagem com as ferramentas **Selecionar (V)**, **Recorte (C)** (com "Focar no alvo" e "Recortar à
   janela"), **Desfoque (B)**, **Retângulo (R)**, **Seta (A)**, **Marcador (M)**, **Texto (T)**; à direita o
-  painel do passo (título, descrição, tipo, metadados, anotações, estilo do guia).
+  painel do passo (título, descrição, tipo, **dicas e alertas**, enquadramento da imagem, metadados, anotações,
+  estilo do guia).
+- **Zoom no alvo** (padrão): a imagem exportada é ampliada ao redor do elemento clicado, com o destaque e o
+  marcador visíveis, sem alterar a captura. Por passo dá para escolher «Tela inteira» (ou mudar o padrão do guia);
+  um recorte manual sempre manda. Vale também para guias antigos.
+- **Dicas e alertas**: caixas de *Dica* (cerceta), *Atenção* (âmbar) e *Nota* (roxo) por passo, com um indicador
+  colorido no cartão da lista.
 - Desfazer/Refazer: Ctrl/⌘+Z, Ctrl/⌘+Shift+Z. Salvamento automático. A 390 px as colunas viram abas.
 
 Os guias ficam no navegador; nada sai da máquina sem uma exportação ou publicação explícita.
@@ -116,15 +122,25 @@ da página de teste `tests/fixtures/paginas/formulario.html`:
 |---|---|---|
 | ![Biblioteca](docs/capturas/editor-biblioteca.png) | ![Editor](docs/capturas/editor-guia.png) | ![Editor a 390 px](docs/capturas/editor-390.png) |
 
+Guia exportado (HTML, fixture `guia-exemplo`) e o painel de dicas/enquadramento do editor:
+
+| HTML exportado (1280 px) | HTML exportado a 390 px | Dicas e enquadramento |
+|---|---|---|
+| ![Guia exportado](docs/capturas/guia-exportado.png) | ![Guia exportado a 390 px](docs/capturas/guia-exportado-390.png) | ![Editor com dicas](docs/capturas/editor-dicas.png) |
+
 ## Exportações
+
+Todas as exportações seguem o mesmo roteiro de workflow: cabeçalho com **autor · nº de passos · tempo estimado ·
+data**, uma frase curta por passo com o alvo em negrito, as caixas de dica/atenção/nota e a imagem **ampliada no
+alvo** (área efetiva: recorte manual › zoom no alvo › tela inteira).
 
 | Formato | Conteúdo |
 |---|---|
 | `.stepbystep.zip` | Intercâmbio/backup: `guide.json` + PNGs **originais** (sem anotações). Reimportável no editor. |
-| Markdown + imagens (zip) | `README.md` com `# Título`, `## n. Passo` e `![…](imagens/passo-NN.png)`; imagens **assadas** com as anotações (opção "reduzir a 1x"). Cola direto em wiki, Git ou Confluence. |
-| HTML autocontido | Um arquivo com CSS Dexterity inline e imagens em `data:` — abre em qualquer navegador, sem rede. |
-| Imprimir / salvar PDF | Abre o HTML e chama a impressão (A4, margem 15 mm, um passo nunca quebra no meio da página). |
-| Notion | Página nova na página-mãe escolhida, com imagens hospedadas no Notion. |
+| Markdown + imagens (zip) | `README.md` com `# Título`, linha de metadados, `## n. Passo`, notas em citação (`> **Dica:** …`) e `![…](imagens/passo-NN.png)`; imagens **assadas** com as anotações (opção "reduzir a 1x"). Cola direto em wiki, Git ou Confluence. |
+| HTML autocontido | Um arquivo com CSS Dexterity inline e imagens em `data:` — um cartão por passo (número grande em cerceta, caixas coloridas, imagem com fio de 1 px); abre em qualquer navegador, sem rede, e se ajusta a 390 px. |
+| Imprimir / salvar PDF | Abre o HTML e chama a impressão (A4, margem 15 mm, fundo branco; um cartão nunca quebra no meio da página). |
+| Notion | Página nova na página-mãe escolhida: callout 📘 com o resumo, `heading_3` "n. título" por passo, um callout por nota (💡 verde, ⚠️ laranja, 📝 roxo) e a imagem hospedada no Notion. |
 
 ## Notion
 
@@ -139,7 +155,7 @@ requisição, `rich_text` ≤ 2000 caracteres), `Notion-Version: 2022-06-28` fix
 
 - Na **extensão** o editor chama `https://api.notion.com` direto (`host_permissions`).
 - No editor **hospedado** o navegador não pode chamar a API do Notion (CORS), então as chamadas passam por
-  `api/notion/[...rota].js` (assinatura Web, exportada só como `GET`/`POST`/`PATCH`/`OPTIONS` — com um
+  `api/notion.js` (assinatura Web, exportada só como `GET`/`POST`/`PATCH`/`OPTIONS` — com um
   `export default` o builder da Vercel trataria o handler como `(req, res)` do Node): allow-list de rotas e
   métodos, corpo repassado byte a byte (multipart intacto),
   só `authorization`, `notion-version` e `content-type` seguem adiante, CORS restrito às origens do editor,
@@ -205,7 +221,7 @@ packages/core/          núcleo — ES modules puros (modelo, frases, coordenada
 packages/editor/        editor web sem build (index.html, app.js, módulos, dexterity.css idêntico aos demais apps Dexterity)
 packages/extensao/      extensão Chrome MV3 (manifest, sw.js, conteúdo, popup; core/ e editor/ gerados por `npm run sincronizar`)
 packages/mac/           app de menu bar em Swift (SwiftPM, macOS 14+)
-api/notion/[...rota].js proxy allow-list para api.notion.com (assinatura Web; só o editor hospedado)
+api/notion.js           proxy allow-list para api.notion.com (assinatura Web; só o editor hospedado)
 api/hash.js             integridade: tamanho e SHA-256 de um arquivo publicado (/editor/* ou /core/*)
 scripts/                dev-server, notion-falso, sincronizar-extensao, empacotar-extensao, gerar-fixtures
 tests/                  core/, extensao/, api/, e2e/, fixtures/ e sincronizacao.test.mjs

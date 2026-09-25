@@ -1,5 +1,7 @@
 # Cadastrar fornecedor no SAP Fiori
 
+_Diego · 9 passos · ≈ 2 min · 24/09/2026_
+
 Como criar um parceiro de negócios do tipo fornecedor pelo app Manage Business Partner.
 
 ## 1. Navegue para fiori.empresa.com.br/ui
@@ -7,6 +9,8 @@ Como criar um parceiro de negócios do tipo fornecedor pelo app Manage Business 
 ![Passo 1 — Navegue para fiori.empresa.com.br/ui](imagens/passo-01.png)
 
 ## 2. Clique em «Criar»
+
+> **Dica:** O botão fica no canto superior direito da lista de parceiros.
 
 ![Passo 2 — Clique em «Criar»](imagens/passo-02.png)
 
@@ -17,6 +21,8 @@ Use a razão social completa, sem abreviações.
 ![Passo 3 — Digite «ACME Ltda» no campo «Nome»](imagens/passo-03.png)
 
 ## 4. Digite sua senha no campo «Senha»
+
+> **Atenção:** Nunca compartilhe sua senha: o campo sai desfocado no manual.
 
 ![Passo 4 — Digite sua senha no campo «Senha»](imagens/passo-04.png)
 
@@ -41,6 +47,8 @@ Use a razão social completa, sem abreviações.
 ## 9. Confira o e-mail de confirmação
 
 O sistema envia o número do parceiro em até 5 minutos.
+
+> **Nota:** Se o e-mail não chegar, confira a caixa de spam.
 
 ---
 _Gerado com StepByStep · Dexterity IT Solutions · 24/09/2026_

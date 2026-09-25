@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gerarId, validarId } from '../../packages/core/ids.js';
 
-const REGEX = /^(g|p|img|a)_[0-9a-z]{8,24}$/;
+const REGEX = /^(g|p|img|a|n)_[0-9a-z]{8,24}$/;
 
 test('gerarId respeita o formato prefixo_tempo36+6 chars', () => {
-  for (const prefixo of ['g', 'p', 'img', 'a']) {
+  for (const prefixo of ['g', 'p', 'img', 'a', 'n']) {
     const id = gerarId(prefixo);
     assert.match(id, REGEX);
     assert.ok(id.startsWith(prefixo + '_'));
@@ -20,6 +20,7 @@ test('validarId aceita o padrão e rejeita o resto', () => {
   assert.equal(validarId('g_m1x4k9zq7a2b'), true);
   assert.equal(validarId('img_m1x4k9zr01aa'), true);
   assert.equal(validarId('p_abcdefgh'), true);
+  assert.equal(validarId('n_m1x4k9zr03n1'), true);   // nota do passo
   assert.equal(validarId('p_abcdefg'), false);       // curto demais
   assert.equal(validarId('x_m1x4k9zq7a2b'), false);  // prefixo desconhecido
   assert.equal(validarId('g_M1X4K9ZQ7A2B'), false);  // maiúsculas

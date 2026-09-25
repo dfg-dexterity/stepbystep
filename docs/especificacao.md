@@ -25,7 +25,7 @@ StepByStep grava processos passo a passo (no navegador, via extensão Chrome MV3
 | D11 | **Undo/redo por snapshots** (`structuredClone` do guia sem imagens), com coalescência de edições de texto | Menos código e sem risco de inverso errado. |
 | D12 | Mac: **macOS 14+**, tap `.listenOnly`, `SCScreenshotManager.captureImage` do **display inteiro** sob o cursor + `recorte` automático pela janela; AX + `AXManualAccessibility` + OCR (Vision) como fallback; `.app` assinado com **certificado autoassinado estável** | Menus/popovers/sheets aparecem na foto; TCC não esquece as permissões a cada build; código Swift escrito sem compilador aqui é validado por job `macos-latest` no CI. |
 | D13 | Mac grava `titulo: ""` + `tituloAuto: true`; **o editor gera as frases** | Zero duplicação de regras em Swift. |
-| D14 | Notion: File Upload API (`/v1/file_uploads` + `/send` multipart, bloco `image` `file_upload`), `Notion-Version: 2022-06-28` fixa, publicação **retomável**; da extensão chama direto (`host_permissions`); do editor hospedado, via `api/notion/[...rota].js` (assinatura Web, corpo repassado byte a byte, CORS restrito à origem do editor) | A API não aceita CORS de navegador; o token é sempre do usuário e nunca fica no servidor. |
+| D14 | Notion: File Upload API (`/v1/file_uploads` + `/send` multipart, bloco `image` `file_upload`), `Notion-Version: 2022-06-28` fixa, publicação **retomável**; da extensão chama direto (`host_permissions`); do editor hospedado, via `api/notion.js` (assinatura Web, corpo repassado byte a byte, CORS restrito à origem do editor) | A API não aceita CORS de navegador; o token é sempre do usuário e nunca fica no servidor. |
 | D15 | Testes: `node --test` para núcleo/API; Playwright 1.56 (`launchPersistentContext` + `channel: 'chromium'` headless novo + `--load-extension`) para extensão e editor | Tudo verificável em Linux, exceto Swift (CI macOS + roteiro manual). |
 
 Fora da v1: Safari (conversor depois; o manifest evita APIs exclusivas do Chrome), Firefox, update incremental de página no Notion, OAuth público do Notion, servidor local/Native Messaging para o Mac.
@@ -123,7 +123,7 @@ stepbystep/
 │       ├── Makefile                      # build, test, app, run
 │       └── README.md                     # toolchain, certificado "StepByStep Dev", permissões, roteiro de teste manual
 ├── api/
-│   ├── notion/[...rota].js               # proxy allow-list para api.notion.com (assinatura Web Request/Response)
+│   ├── notion.js                         # proxy allow-list para api.notion.com (assinatura Web; /api/notion/* chega via rewrite)
 │   └── hash.js                           # SHA-256 dos arquivos servidos (padrão da casa; allow-list /editor/* e /core/*)
 ├── scripts/
 │   ├── dev-server.mjs                    # :8080 — estático com os mesmos rewrites da Vercel + /api/notion (Web) + /api/hash (Node) + NOTION_BASE
@@ -289,6 +289,9 @@ Campos comuns: `id` (`a_…`), `auto` (bool — criada pela captura; o usuário 
       "anotacoes": [
         { "id": "a_m1x4k9zr02a1", "tipo": "retangulo", "auto": true, "x": 2524, "y": 276, "w": 176, "h": 84, "cor": "cerceta" },
         { "id": "a_m1x4k9zr02a2", "tipo": "marcador", "auto": true, "x": 2700, "y": 276, "numero": 2, "cor": "cerceta" }
+      ],
+      "notas": [
+        { "id": "n_m1x4k9zr02n1", "tipo": "dica", "texto": "O botão fica no canto superior direito da lista de parceiros." }
       ]
     },
     {
@@ -327,6 +330,9 @@ Campos comuns: `id` (`a_…`), `auto` (bool — criada pela captura; o usuário 
         { "id": "a_m1x4k9zr05a1", "tipo": "desfoque", "auto": true, "x": 700, "y": 772, "w": 800, "h": 56, "bloco": 16 },
         { "id": "a_m1x4k9zr05a2", "tipo": "retangulo", "auto": true, "x": 684, "y": 756, "w": 832, "h": 88, "cor": "cerceta" },
         { "id": "a_m1x4k9zr05a3", "tipo": "marcador", "auto": true, "x": 1516, "y": 756, "numero": 4, "cor": "cerceta" }
+      ],
+      "notas": [
+        { "id": "n_m1x4k9zr05n1", "tipo": "atencao", "texto": "Nunca compartilhe sua senha: o campo sai desfocado no manual." }
       ]
     },
     {
@@ -411,7 +417,8 @@ Campos comuns: `id` (`a_…`), `auto` (bool — criada pela captura; o usuário 
       "tituloAuto": false,
       "descricao": "O sistema envia o número do parceiro em até 5 minutos.",
       "criadoEm": "2026-09-24T14:20:00.000Z",
-      "contexto": null, "evento": null, "alvo": null, "captura": null, "resultado": null, "anotacoes": []
+      "contexto": null, "evento": null, "alvo": null, "captura": null, "resultado": null, "anotacoes": [],
+      "notas": [ { "id": "n_m1x4k9zr11n1", "tipo": "nota", "texto": "Se o e-mail não chegar, confira a caixa de spam." } ]
     }
   ],
   "imagens": {
@@ -1057,7 +1064,7 @@ PATCH /v1/blocks/<page_id>/children
 - Rate limit ~3 req/s → envios sequenciais; `429` respeita `Retry-After`.
 - Seções (`heading_2`) reiniciam a numeração da lista no Notion; por isso, quando o guia tem seções, os itens recebem prefixo "Passo n — ".
 
-### 8.4 Proxy `api/notion/[...rota].js` (só para o editor hospedado)
+### 8.4 Proxy `api/notion.js` (só para o editor hospedado)
 
 ```js
 // Assinatura Web (Request → Response): o corpo chega como stream e é repassado byte a byte (multipart intacto).
@@ -1223,3 +1230,10 @@ o texto das seções originais foi mantido para preservar o histórico das decis
 | 4.3 | `abreviarUrl` remove `usuario:senha@` da URL. | Credenciais entravam no título do passo. |
 | 4.11 | Falha de rede no `fetch` → uma retentativa (exceto `POST /v1/pages`) e `ErroNotion(0)` em pt-BR; `AbortError` sobe intacto; resposta 2xx sem `id` vira `ErroNotion` em vez de `TypeError`. | Mensagem em inglês («Failed to fetch») e exceções cruas no diálogo. |
 | 5.3 | Estado da gravação ganhou `plataforma` (`'mac'` \| `'outro'`, derivada do userAgent ao iniciar) usada nas opções do redutor. | `plataforma: 'outro'` fixa fazia ⌘S virar «Win+S» na gravação. |
+| 2 / 8.4 | O proxy é `api/notion.js` (não `api/notion/[...rota].js`) e o `vercel.json` reescreve `/api/notion/:caminho*` → `/api/notion?rota=/:caminho*`; o handler aceita o caminho original ou o parâmetro `rota`, sempre pela allow-list. | Catch-all `[...x].js` é recurso do Next.js: em funções soltas a Vercel não cria a rota e o primeiro deploy respondeu 404 em `/api/notion/*`. |
+| 3.1 / 3.2 / 4.1 / 4.2 (zoom no alvo) | `guia.estilo.zoom: 'alvo' \| 'tela'` (ausente = `'alvo'`; `criarGuia` grava `'alvo'`) e `passo.zoom: 'alvo' \| 'tela' \| null` opcional (null/ausente herda do guia; `criarPasso` só grava quando informado). `modelo.js` exporta `ZOOMS`, `ZOOM_PADRAO` e `zoomDoPasso(passo, estilo)`; `validarGuia` só recusa valores fora da lista; `migrarGuia` não muda (ausente é válido). `anotacoes.js` exporta `areaEfetiva(passo, imagem, estilo)`: recorte explícito (limitado como `areaSaida`) › `recorteFocado(alvo.bbox, imagem, {escala: captura.escala})` quando o zoom efetivo é `'alvo'` e o bbox tem w,h > 0 › imagem inteira. `desenharPasso`, `assarPasso`, o canvas e as miniaturas do editor e as exportações usam a área efetiva (`incluirRecorte: false` continua mostrando a imagem inteira). `recorteFocado` passou a garantir também altura ≥ 40 % da imagem (largura ≥ 0,4·H·16/10) — só muda telas mais altas que 16:10. Editor: «Enquadramento» no painel (Padrão do guia / Zoom no alvo / Tela inteira; desabilitado com recorte manual) e «Enquadramento padrão das imagens» no estilo do guia, cada mudança uma entrada de histórico. O app Mac não muda (o `Codable` ignora chaves extras e o Mac grava recorte pela janela, que manda). | Imagem ampliada no ponto do clique, estilo Tango, sem tocar nas capturas e valendo para guias já gravados. Em retrato (celular), 40 % da largura em 16:10 dava uma faixa fina demais. |
+| 3.1 / 3.3 / 4.1 / 4.2 / 4.10 (notas) | `passo.notas: [{ id: 'n_…', tipo: 'dica' \| 'atencao' \| 'nota', texto }]` (ausente = `[]`; `criarPasso` grava `[]`). Novo prefixo de id `n` (`/^(g\|p\|img\|a\|n)_[0-9a-z]{8,24}$/`; o Swift não gera notas e não muda). `modelo.js` exporta `TIPOS_NOTA`, `NOMES_NOTA`, `criarNota(tipo, texto)` e `notasDoPasso(passo)` (só tipo válido e texto não vazio — as exportações usam essa lista). `validarGuia` exige lista, id `n_` único, tipo válido e texto não vazio; `guiaParaPacote` descarta notas vazias (as que o editor ainda está editando) para o `guide.json` voltar válido. Editor: seção «Dicas e alertas» (adicionar por tipo, trocar tipo, editar com coalescência `nota:<id>`, ↑/↓, remover; caixa deixada vazia some ao sair do campo), indicador colorido no cartão da lista, duplicar/mesclar copiam as notas com ids novos. | Caixas de dica/atenção/nota como no Tango; o formato continua v1 porque tudo é opcional. |
+| 4.1 / 4.9 (resumo) | `resumoDoGuia(guia)` → `{ passos (sem seções), minutos, autor, data: atualizadoEm }`, com `SEGUNDOS_POR_TIPO` (navegar 5, clicar 5, marcar/selecionar 6, digitar 10, tecla 3, manual 15; arredonda para cima, mínimo 1 min). `exportar-markdown.js` exporta `partesDoResumo(guia, dataPadrao)` → `[autor?, 'N passos', '≈ X min', 'dd/mm/aaaa']` (data do guia; sem ela, a da exportação), usada nas três exportações. | Cabeçalho "Autor · N passos · ≈ X min · data". |
+| 4.9 (HTML / Markdown) | HTML redesenhado: cabeçalho com logo, «Manual passo a passo», título, descrição e `<p class="meta">` com o resumo; cada passo é `<li class="passo" data-tipo id="passo-n">` com `<h2><span class="numero">n</span> <span class="titulo">…</span></h2>` (trechos «…» em `<strong>`, via `tituloComDestaqueHtml`) e `<div class="passo-corpo">` com `p.passo-descricao`, `aside.nota.nota--{tipo}` (rótulo + texto) e `<figure class="passo-imagem"><img></figure>`; seção continua `<li class="secao"><h2 class="secao">`. O layout vive em `impressao.css` (cartões com fio de 1 px, número em Barlow Condensed cerceta, notas cerceta/âmbar/roxo, 390 px sem rolagem, A4 branco com `break-inside: avoid` no cartão e na nota). Markdown: linha de metadados em itálico sob o título e notas como `> **Dica:** texto` (escapado; multilinha continua na citação) antes da imagem. `frases.js` exporta `trechosDoTitulo(titulo)` (par «» mais externo), usado pelo HTML e por `richTextComDestaque`. | Visual de workflow (Tango) no HTML/PDF e no Markdown. |
+| 4.11 / 8.2 / 8.3 (Notion) | `guiaParaBlocos` gera só blocos de topo e devolve também `origem` (índice do passo de cada bloco, −1 no cabeçalho): callout 📘 `gray_background` com o resumo (substitui "Manual gerado com StepByStep…"), parágrafo da descrição; por passo `heading_3` "n. título" (negrito no alvo), parágrafo da descrição, um `callout` por nota (`blocoDeNota`, `CALLOUT_NOTA`: dica 💡 `green_background`, atenção ⚠️ `orange_background`, nota 📝 `purple_background`, rótulo em negrito) e `image` (file_upload, legenda "Passo n"); seção → `heading_2` (+ descrição). Sem `numbered_list_item`: a numeração vai no texto e seções não a reiniciam (o prefixo "Passo n — " da 8.3 saiu). Sem `divider` entre passos (+1 bloco por passo = mais PATCHs sem ganho visual sobre o `heading_3`). `publicarGuia` monta os lotes com um marcador no lugar do id do upload (`sbs-upload:<passoId>`), troca pelo id real no envio e tira a imagem sem upload do lote — a contagem de lotes da retomada não depende de ids nem de falhas; o cabeçalho vai na primeira janela de 30 imagens. `impressaoDoGuia` inclui o autor e, por passo, as notas exportáveis e o enquadramento efetivo (passos com imagem): editar notas ou zoom recomeça a publicação numa página nova. | Página no Notion com cara de workflow; um passo agora são vários blocos de topo, então o mapeamento lote → passos passou a ser por bloco. |
+| 4.8 / 7.2 (fontes do desenho) | `medidas().fonteMarcador` = `600 {20e}px "Barlow Condensed", "Arial Narrow", sans-serif` e `fonteTexto(t)` = `600 {t}px Figtree, system-ui, sans-serif`; o editor carrega as duas famílias (`document.fonts.load`) antes de assar para exportação e Notion (`fontesDoDesenho`). | Sem família genérica, glifo ausente na fonte local caía na serifada padrão no marcador e no texto assados. |

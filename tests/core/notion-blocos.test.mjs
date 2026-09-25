@@ -67,75 +67,81 @@ test('contarBlocos conta filhos recursivamente', () => {
   assert.equal(contarBlocos(item), 3);
 });
 
-test('guiaParaBlocos: callout, descrição, itens numerados com destaque, filhos e heading_2 para seção', () => {
+test('guiaParaBlocos: callout de resumo, descrição, heading_3 "n. título" com destaque, descrição, callouts das notas, imagem e heading_2 para seção', () => {
   const g = lerFixture('guia-exemplo');
-  const { titulo, blocos } = guiaParaBlocos(g, { uploadIdDoPasso: (p) => (p.captura?.imagemId ? `up-${p.id}` : null), data: DATA_FIXA });
+  const { titulo, blocos, origem } = guiaParaBlocos(g, { uploadIdDoPasso: (p) => (p.captura?.imagemId ? `up-${p.id}` : null), data: DATA_FIXA });
   assert.equal(titulo, 'Cadastrar fornecedor no SAP Fiori');
   assert.equal(blocos[0].type, 'callout');
   assert.deepEqual(blocos[0].callout.icon, { type: 'emoji', emoji: '📘' });
   assert.equal(blocos[0].callout.color, 'gray_background');
-  assert.equal(texto(blocos[0].callout.rich_text), 'Manual gerado com StepByStep · Dexterity IT Solutions · 10 passos · 24/09/2026');
+  assert.equal(texto(blocos[0].callout.rich_text), 'Diego · 9 passos · ≈ 2 min · 24/09/2026');
   assert.equal(blocos[1].type, 'paragraph');
   assert.equal(texto(blocos[1].paragraph.rich_text), g.descricao);
-  assert.equal(blocos.length, 2 + 10);
-  // guia tem seção → prefixo "Passo n — "
-  const clique = blocos[3];
-  assert.equal(clique.type, 'numbered_list_item');
-  assert.equal(texto(clique.numbered_list_item.rich_text), 'Passo 2 — Clique em «Criar»');
-  assert.deepEqual(clique.numbered_list_item.rich_text, [
-    { type: 'text', text: { content: 'Passo 2 — ' } },
+  // sem aninhamento: tudo de topo, uma sequência por passo
+  assert.deepEqual(blocos.map((b) => b.type), [
+    'callout', 'paragraph',
+    'heading_3', 'image',                                  // 1 navegar
+    'heading_3', 'callout', 'image',                       // 2 clicar + dica
+    'heading_3', 'paragraph', 'image',                     // 3 digitar + descrição
+    'heading_3', 'callout', 'image',                       // 4 senha + atenção
+    'heading_3', 'image', 'heading_3', 'image', 'heading_3', 'image',   // 5, 6, 7
+    'heading_2',                                           // seção
+    'heading_3', 'image',                                  // 8
+    'heading_3', 'paragraph', 'callout',                   // 9 manual sem imagem + descrição + nota
+  ]);
+  assert.deepEqual(origem, [-1, -1, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 9, 9, 9]);
+  for (const b of blocos) { assert.equal(b.object, 'block'); assert.equal('children' in b[b.type], false); }
+  // título do passo: número no texto (seções não reiniciam nada) e alvo em negrito
+  assert.deepEqual(blocos[4].heading_3.rich_text, [
+    { type: 'text', text: { content: '2. ' } },
     { type: 'text', text: { content: 'Clique em ' } },
     { type: 'text', text: { content: '«Criar»' }, annotations: { bold: true } },
   ]);
-  assert.deepEqual(clique.numbered_list_item.children, [
-    { object: 'block', type: 'image', image: { type: 'file_upload', file_upload: { id: 'up-p_m1x4k9zr02ab' }, caption: [{ type: 'text', text: { content: 'Passo 2' } }] } },
-  ]);
-  // descrição vem antes da imagem
-  const digitar = blocos[4].numbered_list_item;
-  assert.deepEqual(digitar.children.map((c) => c.type), ['paragraph', 'image']);
-  assert.equal(texto(digitar.children[0].paragraph.rich_text), 'Use a razão social completa, sem abreviações.');
-  // seção
-  const secao = blocos[9];
-  assert.equal(secao.type, 'heading_2');
-  assert.equal(texto(secao.heading_2.rich_text), 'Conferência no SAP GUI');
+  assert.deepEqual(blocos[6], { object: 'block', type: 'image', image: { type: 'file_upload', file_upload: { id: 'up-p_m1x4k9zr02ab' }, caption: [{ type: 'text', text: { content: 'Passo 2' } }] } });
+  // notas: callout com emoji e cor por tipo, rótulo em negrito
+  assert.deepEqual(blocos[5], { object: 'block', type: 'callout', callout: { icon: { type: 'emoji', emoji: '💡' }, color: 'green_background', rich_text: [
+    { type: 'text', text: { content: 'Dica: ' }, annotations: { bold: true } },
+    { type: 'text', text: { content: 'O botão fica no canto superior direito da lista de parceiros.' } },
+  ] } });
+  assert.deepEqual([blocos[11].callout.icon.emoji, blocos[11].callout.color, texto(blocos[11].callout.rich_text)], ['⚠️', 'orange_background', 'Atenção: Nunca compartilhe sua senha: o campo sai desfocado no manual.']);
+  assert.deepEqual([blocos[24].callout.icon.emoji, blocos[24].callout.color, texto(blocos[24].callout.rich_text)], ['📝', 'purple_background', 'Nota: Se o e-mail não chegar, confira a caixa de spam.']);
+  assert.equal(texto(blocos[8].paragraph.rich_text), 'Use a razão social completa, sem abreviações.');
+  assert.equal(texto(blocos[19].heading_2.rich_text), 'Conferência no SAP GUI');
   // passo depois da seção continua a numeração global
-  assert.equal(texto(blocos[10].numbered_list_item.rich_text), 'Passo 8 — Escolha o menu «Arquivo › Salvar»');
-  // manual sem imagem, com descrição: só o parágrafo
-  const manual = blocos[11].numbered_list_item;
-  assert.deepEqual(manual.children.map((c) => c.type), ['paragraph']);
-  for (const b of blocos) assert.equal(b.object, 'block');
+  assert.equal(texto(blocos[20].heading_3.rich_text), '8. Escolha o menu «Arquivo › Salvar»');
   assert.ok(JSON.stringify(blocos).indexOf('null') === -1, 'nunca null em campos opcionais');
 });
 
-test('manual sem imagem e sem descrição não tem children; sem seções não há prefixo', () => {
+test('passo sem imagem/descrição/notas vira só o heading_3; notas vazias ou de tipo desconhecido não saem', () => {
   const g = criarGuia({ titulo: 'T' });
-  g.passos.push(criarPasso({ tipo: 'manual', titulo: 'Só texto', tituloAuto: false }));
+  g.passos.push(criarPasso({ tipo: 'manual', titulo: 'Só texto', tituloAuto: false, notas: [{ id: 'n_m1x4k9zr01n1', tipo: 'dica', texto: ' ' }, { id: 'n_m1x4k9zr01n2', tipo: 'x', texto: 'a' }] }));
   g.passos.push(criarPasso({ tipo: 'clicar', titulo: 'Clique em «X»', captura: { imagemId: 'img_m1x4k9zr01aa', largura: 1, altura: 1, faltante: false } }));
   const { blocos } = guiaParaBlocos(g, { uploadIdDoPasso: () => null, data: DATA_FIXA });
-  assert.equal(blocos.length, 3);
-  assert.equal('children' in blocos[1].numbered_list_item, false);
-  assert.equal(texto(blocos[1].numbered_list_item.rich_text), 'Só texto');
-  assert.equal(texto(blocos[2].numbered_list_item.rich_text), 'Clique em «X»');
-  assert.equal('children' in blocos[2].numbered_list_item, false);  // sem uploadId não há imagem
+  assert.deepEqual(blocos.map((b) => b.type), ['callout', 'heading_3', 'heading_3']);   // sem uploadId não há imagem
+  assert.equal(texto(blocos[1].heading_3.rich_text), '1. Só texto');
+  assert.equal(texto(blocos[2].heading_3.rich_text), '2. Clique em «X»');
+  assert.match(texto(blocos[0].callout.rich_text), /^2 passos · ≈ 1 min · \d{2}\/\d{2}\/\d{4}$/);   // sem autor
   const semTitulo = guiaParaBlocos(criarGuia(), { uploadIdDoPasso: () => null });
   assert.equal(semTitulo.titulo, 'Manual sem título');
   assert.equal(semTitulo.blocos.length, 1);
 });
 
-test('texto > 2000 chars é fatiado dentro do bloco', () => {
+test('texto > 2000 chars é fatiado dentro do bloco (descrições, título e nota)', () => {
   const g = criarGuia({ titulo: 'T', descricao: 'd'.repeat(2500) });
-  g.passos.push(criarPasso({ tipo: 'manual', titulo: 'm'.repeat(3000), tituloAuto: false, descricao: 'x'.repeat(2001) }));
+  g.passos.push(criarPasso({ tipo: 'manual', titulo: 'm'.repeat(3000), tituloAuto: false, descricao: 'x'.repeat(2001), notas: [{ id: 'n_m1x4k9zr01n1', tipo: 'atencao', texto: 'n'.repeat(4001) }] }));
   const { blocos } = guiaParaBlocos(g, { uploadIdDoPasso: () => null });
   assert.equal(blocos[1].paragraph.rich_text.length, 2);
-  assert.equal(blocos[2].numbered_list_item.rich_text.length, 2);
-  assert.equal(blocos[2].numbered_list_item.children[0].paragraph.rich_text.length, 2);
+  assert.equal(blocos[2].heading_3.rich_text.length, 3);        // "1. " + 2000 + 1000
+  assert.equal(blocos[3].paragraph.rich_text.length, 2);
+  assert.equal(blocos[4].callout.rich_text.length, 4);          // rótulo + 2000 + 2000 + 1
   for (const b of JSON.stringify(blocos).match(/"content":"[^"]*"/g)) assert.ok(b.length <= 2000 + 12);
 });
 
 test('250 passos → lotes ≤ 100 de topo e ≤ 1000 no total, na ordem', () => {
   const g = guiaComPassos(250, { comImagem: true, secoes: true });
   const { blocos } = guiaParaBlocos(g, { uploadIdDoPasso: () => 'up' });
-  assert.equal(blocos.length, 1 + 250 + 5);
+  // callout + por passo heading_3 + image (+ paragraph nos ímpares) + 5 seções
+  assert.equal(blocos.length, 1 + 250 * 2 + 125 + 5);
   const lotes = dividirEmLotes(blocos);
   assert.equal(lotes.flat().length, blocos.length);
   assert.deepEqual(lotes.flat(), blocos);
@@ -143,7 +149,7 @@ test('250 passos → lotes ≤ 100 de topo e ≤ 1000 no total, na ordem', () =>
     assert.ok(lote.length <= 100);
     assert.ok(lote.reduce((s, b) => s + contarBlocos(b), 0) <= 1000);
   }
-  assert.deepEqual(lotes.map((l) => l.length), [100, 100, 56]);
+  assert.deepEqual(lotes.map((l) => l.length), [100, 100, 100, 100, 100, 100, 31]);
   // limite total manda quando os filhos pesam
   const pesados = Array.from({ length: 30 }, () => ({ object: 'block', type: 'numbered_list_item', numbered_list_item: { rich_text: [], children: Array(99).fill({ object: 'block', type: 'paragraph', paragraph: { rich_text: [] } }) } }));
   const lotesPesados = dividirEmLotes(pesados);

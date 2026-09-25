@@ -5,7 +5,7 @@ import { criarZip } from '../core/zip.js';
 import { guiaParaMarkdown, nomeImagemExportada } from '../core/exportar-markdown.js';
 import { guiaParaHtml } from '../core/exportar-html.js';
 import { assarPasso } from '../core/render-canvas.js';
-import { separarRecorte, areaSaida } from '../core/anotacoes.js';
+import { areaEfetiva } from '../core/anotacoes.js';
 import { numeroDoPasso } from '../core/modelo.js';
 import { carregarImagem } from '../core/armazenamento.js';
 import { obterBitmap } from './canvas-anotacao.js';
@@ -38,7 +38,8 @@ async function obterImagemOriginal(id) {
 }
 
 /**
- * Imagem do passo com as anotações aplicadas (recorte, desfoque, marcações).
+ * Imagem do passo com as anotações aplicadas (recorte, desfoque, marcações), na área efetiva: recorte manual,
+ * senão zoom no alvo (padrão do guia ou do passo), senão a tela inteira.
  * @param {{reduzir1x?:boolean}} [opcoes] reduzir1x: largura de saída = área ÷ escala da captura
  * @returns {Promise<{blob:Blob, largura:number, altura:number}|null>}
  */
@@ -49,14 +50,22 @@ export async function assarImagemDoPasso(passo, guia, opcoes = {}) {
   let larguraMax;
   if (opcoes.reduzir1x) {
     const escala = passo.captura.escala > 0 ? passo.captura.escala : 1;
-    const { recorte } = separarRecorte(passo.anotacoes);
-    const area = areaSaida({ largura: bitmap.width, altura: bitmap.height }, recorte);
+    const area = areaEfetiva(passo, { largura: bitmap.width, altura: bitmap.height }, guia.estilo);
     larguraMax = Math.max(1, Math.round(area.w / escala));
   }
   return assarPasso(bitmap, passo, { estilo: guia.estilo, larguraMax });
 }
 
+/**
+ * Fontes do marcador (Barlow Condensed) e do texto (Figtree) carregadas antes de assar: o canvas não espera
+ * @font-face e desenharia com a fonte serifada padrão se nenhuma parte da página tivesse usado a família ainda.
+ */
+export const fontesDoDesenho = () => (document.fonts?.load
+  ? Promise.all(['600 20px "Barlow Condensed"', '600 16px Figtree'].map((f) => document.fonts.load(f))).then(() => document.fonts.ready).catch(() => {})
+  : Promise.resolve());
+
 async function assarTodas(guia, opcoes, rotulo) {
+  await fontesDoDesenho();
   const comImagem = guia.passos.filter(temImagem);
   const aviso = avisar(`${rotulo}: preparando imagens…`, { duracao: 0 });
   const saida = new Map(); // passoId → { blob, largura, altura }
