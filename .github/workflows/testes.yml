@@ -1,0 +1,82 @@
+# Testes do StepByStep: núcleo/API/sincronização e e2e (Playwright) no Ubuntu; o app Mac
+# (Swift, escrito sem compilador no Linux) só é validado de verdade pelo job macos-latest.
+name: Testes
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Núcleo, API e e2e (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Dependências
+        run: npm ci
+
+      - name: Chromium do Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Sincronizar core/editor na extensão
+        run: npm run sincronizar
+
+      - name: Testes sem navegador (node --test)
+        run: npm test
+
+      # Sem fallback com xvfb-run: os e2e fixam `headless: true` (headless novo, que carrega a extensão),
+      # então repetir a suíte sob um X virtual só dobrava o tempo de uma falha real. Uma segunda execução
+      # em janela (headless:false) exigiria que tests/e2e lesse uma variável — hoje nenhuma é lida.
+      - name: Testes e2e (Playwright, headless novo)
+        run: npm run test:e2e
+
+  mac:
+    name: App Mac (swift build + swift test)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: false
+    defaults:
+      run:
+        # `bash` explícito = `bash -eo pipefail`: sem isso `swift build | tee` engole o erro de compilação
+        shell: bash
+        working-directory: packages/mac
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          swift --version
+
+      - name: swift build -c release
+        run: swift build -c release 2>&1 | tee build.log
+
+      - name: swift test
+        run: swift test 2>&1 | tee test.log
+
+      - name: Logs do Swift (em caso de falha)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-logs
+          path: |
+            packages/mac/build.log
+            packages/mac/test.log
+          if-no-files-found: ignore

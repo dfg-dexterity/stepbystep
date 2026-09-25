@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StepByStep — Dexterity</title>
+<meta name="description" content="Editor de manuais passo a passo: anote as capturas, organize os passos e exporte para Markdown, HTML, PDF ou Notion.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="logo-dexterity.svg" type="image/svg+xml">
+<link rel="stylesheet" href="fontes.css">
+<link rel="stylesheet" href="dexterity.css">
+<link rel="stylesheet" href="impressao.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="dxt-topbar app-topbar">
+  <div class="dxt-topbar-inner">
+    <a class="marca" href="#/" aria-label="StepByStep — voltar à biblioteca">
+      <img class="dxt-logo" src="logo-dexterity.svg" alt="Dexterity IT Solutions" width="120" height="27">
+      <span class="marca-nome">StepByStep</span>
+    </a>
+    <nav class="dxt-nav" aria-label="Principal">
+      <a href="#/" id="nav-biblioteca">Biblioteca</a>
+    </nav>
+    <div class="dxt-topbar-right">
+      <span class="dxt-badge" id="ambiente" hidden></span>
+    </div>
+  </div>
+</header>
+
+<main id="app" class="app-main">
+  <p class="app-carregando">Carregando…</p>
+</main>
+
+<!-- Biblioteca (#/ e #/importar) -->
+<template id="tpl-biblioteca">
+  <section class="biblioteca" id="biblioteca">
+    <div class="biblioteca-cabecalho">
+      <div class="biblioteca-cabecalho-texto">
+        <span class="dxt-eyebrow">StepByStep · Dexterity IT Solutions</span>
+        <h1>Biblioteca</h1>
+        <p>Manuais gravados no navegador e no Mac, prontos para anotar, exportar e publicar.</p>
+      </div>
+      <div class="dxt-controls">
+        <button type="button" id="btn-novo-guia" class="dxt-btn dxt-btn--ghost">Novo guia manual</button>
+        <button type="button" id="btn-importar" class="dxt-btn">Importar</button>
+      </div>
+    </div>
+    <div id="biblioteca-banner" class="biblioteca-banner"></div>
+    <div id="biblioteca-lista" class="biblioteca-lista" aria-live="polite"></div>
+    <footer class="app-rodape">
+      <span id="biblioteca-armazenamento" class="dxt-num"></span>
+      <span>Os guias ficam só neste navegador (IndexedDB). Exporte um .stepbystep.zip como cópia de segurança.</span>
+    </footer>
+  </section>
+</template>
+
+<!-- Editor (#/guia/<id>) -->
+<template id="tpl-editor">
+  <section class="editor" id="editor">
+    <header class="editor-cabecalho">
+      <a class="editor-voltar" href="#/" aria-label="Voltar à biblioteca">← Biblioteca</a>
+      <div class="editor-titulo-wrap">
+        <label class="dxt-eyebrow" for="guia-titulo">Guia</label>
+        <input id="guia-titulo" class="editor-titulo" type="text" placeholder="Título do manual" autocomplete="off">
+      </div>
+      <span id="editor-resumo" class="dxt-badge editor-resumo"></span>
+    </header>
+
+    <!-- até 900 px as colunas viram abas (tablist/tab/tabpanel); acima disso a lista de abas fica oculta -->
+    <div class="editor-abas" role="tablist" aria-label="Painéis do editor">
+      <button type="button" role="tab" id="aba-passos" data-aba="passos" class="is-ativa" aria-selected="true" aria-controls="col-passos">Passos</button>
+      <button type="button" role="tab" id="aba-imagem" data-aba="imagem" aria-selected="false" aria-controls="col-imagem" tabindex="-1">Imagem</button>
+      <button type="button" role="tab" id="aba-detalhes" data-aba="detalhes" aria-selected="false" aria-controls="col-detalhes" tabindex="-1">Detalhes</button>
+    </div>
+
+    <aside class="editor-col editor-col--passos is-ativa" id="col-passos" data-col="passos" role="tabpanel" aria-labelledby="aba-passos">
+      <div class="editor-col-cabecalho">
+        <h2>Passos</h2>
+        <span id="lista-contagem" class="dxt-badge"></span>
+        <button type="button" id="btn-novo-passo" class="dxt-btn dxt-btn--ghost dxt-btn--sm" title="Inserir passo manual depois do passo atual">+ Passo</button>
+      </div>
+      <div id="lista-passos" class="editor-col-corpo"></div>
+    </aside>
+
+    <section class="editor-col editor-col--imagem" id="col-imagem" data-col="imagem" role="tabpanel" aria-labelledby="aba-imagem">
+      <div id="ferramentas" class="ferramentas"></div>
+      <div id="canvas-wrap" class="editor-col-corpo"></div>
+    </section>
+
+    <aside class="editor-col editor-col--detalhes" id="col-detalhes" data-col="detalhes" role="tabpanel" aria-labelledby="aba-detalhes">
+      <div class="editor-col-cabecalho">
+        <h2>Detalhes</h2>
+      </div>
+      <div id="painel-passo" class="editor-col-corpo"></div>
+    </aside>
+
+    <footer class="editor-rodape">
+      <div class="dxt-controls">
+        <button type="button" id="btn-desfazer" class="dxt-btn dxt-btn--ghost dxt-btn--sm" title="Desfazer (Ctrl/⌘+Z)">Desfazer</button>
+        <button type="button" id="btn-refazer" class="dxt-btn dxt-btn--ghost dxt-btn--sm" title="Refazer (Ctrl/⌘+Shift+Z)">Refazer</button>
+        <button type="button" id="btn-salvar" class="dxt-btn dxt-btn--ghost dxt-btn--sm">Salvar</button>
+        <span id="estado-salvamento" class="rodape-estado dxt-num" aria-live="polite"></span>
+      </div>
+      <div class="dxt-controls">
+        <span id="armazenamento" class="rodape-estado dxt-num"></span>
+        <button type="button" id="btn-exportar" class="dxt-btn dxt-btn--ghost dxt-btn--sm" aria-haspopup="menu" aria-expanded="false">Exportar ▾</button>
+        <button type="button" id="btn-notion" class="dxt-btn dxt-btn--sm">Notion</button>
+      </div>
+    </footer>
+  </section>
+</template>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

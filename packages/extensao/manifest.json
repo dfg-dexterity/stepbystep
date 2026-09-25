@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_nome__",
+  "description": "__MSG_descricao__",
+  "version": "0.1.0",
+  "default_locale": "pt_BR",
+  "minimum_chrome_version": "116",
+  "icons": { "16": "icones/16.png", "32": "icones/32.png", "48": "icones/48.png", "128": "icones/128.png" },
+  "action": { "default_popup": "popup/popup.html", "default_title": "StepByStep", "default_icon": { "16": "icones/16.png", "32": "icones/32.png" } },
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "webNavigation", "alarms"],
+  "host_permissions": ["<all_urls>", "https://api.notion.com/*"],
+  "commands": {
+    "alternar-gravacao": { "suggested_key": { "default": "Alt+Shift+R" }, "description": "Iniciar ou parar a gravação" }
+  },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}

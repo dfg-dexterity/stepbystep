@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>StepByStep</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="cabecalho">
+    <span class="marca">StepByStep</span>
+    <span id="situacao" class="situacao">Parado</span>
+  </header>
+
+  <section class="controles" aria-label="Gravação">
+    <p class="contador"><span id="contador" class="numero">0</span> <span id="contador-rotulo">passos</span></p>
+    <div class="botoes">
+      <button id="iniciar" type="button" class="botao primario">Iniciar gravação</button>
+      <button id="pausar" type="button" class="botao" hidden>Pausar</button>
+      <button id="retomar" type="button" class="botao" hidden>Retomar</button>
+      <button id="parar" type="button" class="botao atencao" hidden>Parar</button>
+    </div>
+    <p id="aviso" class="aviso" hidden></p>
+    <p class="dica">Atalho: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> inicia ou para a gravação.</p>
+  </section>
+
+  <section class="guias" aria-label="Últimos guias">
+    <h2>Últimos guias</h2>
+    <ul id="lista" class="lista"></ul>
+    <p id="vazio" class="vazio" hidden>Nenhum guia gravado ainda.</p>
+  </section>
+
+  <footer class="rodape">
+    <button id="abrir-editor" type="button" class="botao">Abrir editor</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

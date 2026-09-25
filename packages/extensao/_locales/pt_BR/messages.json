@@ -1,0 +1,10 @@
+{
+  "nome": {
+    "message": "StepByStep — Dexterity",
+    "description": "Nome da extensão"
+  },
+  "descricao": {
+    "message": "Grava processos passo a passo no navegador: capturas de tela, frases em português e editor de manuais.",
+    "description": "Descrição curta da extensão"
+  }
+}

@@ -1,9 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["gru1"],
-  "redirects": [{ "source": "/", "destination": "/editor/", "permanent": false }],
+  "redirects": [
+    { "source": "/", "destination": "/editor/", "permanent": false },
+    { "source": "/editor", "destination": "/editor/", "permanent": false }
+  ],
   "rewrites": [
-    { "source": "/editor", "destination": "/packages/editor/index.html" },
     { "source": "/editor/", "destination": "/packages/editor/index.html" },
     { "source": "/editor/:caminho*", "destination": "/packages/editor/:caminho*" },
     { "source": "/core/:caminho*", "destination": "/packages/core/:caminho*" }

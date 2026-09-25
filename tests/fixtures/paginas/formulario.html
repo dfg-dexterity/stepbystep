@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Formulário de teste — StepByStep</title>
+  <style>
+    body { margin: 0; padding: 24px 32px; background: #fff; color: #222; font: 14px/1.4 system-ui, sans-serif; }
+    h1 { margin: 0 0 16px; font-size: 20px; }
+    .linha { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .linha label { width: 90px; }
+    input, select, button { font: inherit; }
+    input[type="text"], input[type="email"], input[type="password"], select { width: 240px; padding: 4px 6px; }
+    table { border-collapse: collapse; margin: 12px 0; }
+    td { border: 1px solid #bbb; padding: 4px 8px; }
+    iframe { display: block; margin: 12px 0; border: 2px solid #888; width: 400px; height: 130px; }
+    .acoes { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Cadastro de teste</h1>
+
+  <div class="linha"><label for="nome">Nome</label><input id="nome" name="nome" type="text"></div>
+  <div class="linha"><span style="width:90px">E-mail</span><input id="email" name="email" type="email" aria-label="E-mail"></div>
+  <div class="linha"><label for="senha">Senha</label><input id="senha" name="senha" type="password"></div>
+  <div class="linha">
+    <label for="pais">País</label>
+    <select id="pais" name="pais">
+      <option value="">Selecione…</option>
+      <option value="BR">Brasil</option>
+      <option value="AR">Argentina</option>
+    </select>
+  </div>
+  <div class="linha"><input id="aceito" name="aceito" type="checkbox"><label for="aceito">Aceito os termos</label></div>
+
+  <table>
+    <tr><td>Centro de custo</td><td><input id="centro" type="text"></td></tr>
+  </table>
+
+  <iframe id="quadro" src="iframe-filho.html" title="Quadro"></iframe>
+
+  <meu-widget></meu-widget>
+
+  <div class="acoes">
+    <a id="ajuda" href="pagina2.html" target="_blank">Abrir ajuda em nova aba</a>
+    <button id="enviar" type="button">Enviar</button>
+  </div>
+
+  <script>
+    customElements.define('meu-widget', class extends HTMLElement {
+      constructor() {
+        super();
+        const raiz = this.attachShadow({ mode: 'open' });
+        const botao = document.createElement('button');
+        botao.textContent = 'Botão no shadow';
+        raiz.append(botao);
+      }
+    });
+    document.getElementById('enviar').addEventListener('click', () => { location.href = 'pagina2.html'; });
+  </script>
+</body>
+</html>
