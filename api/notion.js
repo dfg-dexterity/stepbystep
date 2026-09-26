@@ -5,7 +5,7 @@
  * Assinatura Web (Request → Response): o corpo chega como stream e é repassado
  * byte a byte, com o boundary do multipart intacto. Não usar (req, res) do Node:
  * os helpers da Vercel consomem o corpo antes do handler. Só os exports nomeados por
- * método (GET/POST/PATCH/OPTIONS) fazem a Vercel montar um Request — sem `export default`
+ * método fazem a Vercel montar um Request — sem `export default`
  * (ver nota no fim); o dev-server e os testes importam os mesmos exports nomeados.
  *
  * Sem segredo no servidor, sem log de cabeçalhos, `no-store`, allow-list de rotas
@@ -85,3 +85,7 @@ export const GET = handler;
 export const POST = handler;
 export const PATCH = handler;
 export const OPTIONS = handler;
+// Métodos fora da allow-list também passam pelo handler: sem export, a Vercel responde 405 sem CORS;
+// assim a recusa é igual em todo ambiente (403 com CORS), como o "Verificar publicação" confere.
+export const PUT = handler;
+export const DELETE = handler;

@@ -146,3 +146,11 @@ test('método não permitido nos estáticos e função inexistente', async () =>
   r = await fetch(url('/api/inexistente'));
   assert.equal(r.status, 404);
 });
+
+test('proxy recusa DELETE e PUT pela allow-list (403 com CORS, igual à produção)', async () => {
+  for (const method of ['DELETE', 'PUT']) {
+    const r = await fetch(url('/api/notion/v1/pages'), { method });
+    assert.equal(r.status, 403, method);
+    assert.ok(r.headers.get('access-control-allow-origin'), method);
+  }
+});
