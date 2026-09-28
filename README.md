@@ -69,6 +69,21 @@ Gravar e removidos ao parar.
 
 Páginas `chrome://`, a Chrome Web Store e PDFs não podem ser gravados — use o popup e passos manuais.
 
+## Instalar o app Mac (pronto, sem compilar)
+
+O workflow **App Mac** compila o app no GitHub (binário universal: Apple Silicon e Intel) a cada mudança em
+`packages/mac/` e publica o zip na release fixa
+[`mac-latest`](https://github.com/dfg-dexterity/stepbystep/releases/tag/mac-latest).
+
+1. Baixe `StepByStep-<versão>-mac.zip` na release e descompacte.
+2. Arraste `StepByStep.app` para **Aplicativos** e abra. Como o app não é assinado por uma conta de
+   desenvolvedor Apple, o macOS recusa na primeira vez: vá em **Ajustes do Sistema › Privacidade e Segurança** e
+   clique em **Abrir Mesmo Assim** (ou, no Terminal, `xattr -dr com.apple.quarantine /Applications/StepByStep.app`).
+3. Libere **Acessibilidade** e **Gravação de Tela** no painel de permissões e **reabra** o app.
+
+A assinatura é ad-hoc: a cada versão nova o macOS pode pedir as permissões de novo. Para evitar isso, compile
+localmente com o certificado estável (abaixo).
+
 ## Build do app Mac
 
 ```bash

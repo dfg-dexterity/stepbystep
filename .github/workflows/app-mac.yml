@@ -1,0 +1,98 @@
+# Gera o StepByStep.app pronto para baixar (binário universal: Apple Silicon + Intel), sem precisar de
+# Xcode nem Terminal no Mac de quem usa. Em qualquer branch o zip fica como artefato do run; na main ele
+# também é publicado na release "mac-latest" (link fixo, sempre a última versão).
+# Assinatura ad-hoc (sem conta de desenvolvedor Apple): na primeira abertura o macOS pede
+# "Abrir mesmo assim" em Ajustes › Privacidade e Segurança — ver LEIA-ME no zip e packages/mac/README.md.
+name: App Mac
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "packages/mac/**"
+      - ".github/workflows/app-mac.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # só para publicar a release na main
+
+concurrency:
+  group: app-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  empacotar:
+    name: StepByStep.app (universal)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash   # bash -eo pipefail: um erro do swift build não passa pelo `tee`
+        working-directory: packages/mac
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versão
+        id: versao
+        run: |
+          versao=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Recursos/Info.plist)
+          # número do build = número do run: identifica qual zip está instalado (Sobre › versão)
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" Recursos/Info.plist
+          echo "versao=$versao" >> "$GITHUB_OUTPUT"
+          echo "zip=StepByStep-$versao-mac.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Compilar e montar o .app (arm64 + x86_64, assinatura ad-hoc)
+        run: ARCHS="arm64 x86_64" bash scripts/empacotar.sh
+
+      - name: Conferir binário e assinatura
+        run: |
+          lipo -info build/StepByStep.app/Contents/MacOS/StepByStep
+          lipo build/StepByStep.app/Contents/MacOS/StepByStep -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 build/StepByStep.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/StepByStep.app/Contents/Info.plist
+
+      - name: Compactar (ditto preserva a assinatura)
+        run: |
+          mkdir -p build/StepByStep
+          cp -R build/StepByStep.app build/StepByStep/
+          cat > build/StepByStep/LEIA-ME.txt <<'TXT'
+          StepByStep para Mac (macOS 14 ou mais novo, Apple Silicon ou Intel)
+
+          1. Arraste StepByStep.app para a pasta Aplicativos.
+          2. Abra o app. O macOS avisa que não pode verificar o desenvolvedor:
+             clique em OK, vá em Ajustes do Sistema › Privacidade e Segurança e,
+             no fim da página, clique em "Abrir Mesmo Assim" (StepByStep).
+             (Alternativa no Terminal: xattr -dr com.apple.quarantine /Applications/StepByStep.app)
+          3. O ícone aparece na barra de menus. No painel "Permissões", libere
+             Acessibilidade e Gravação de Tela para o StepByStep e REABRA o app.
+          4. Iniciar gravação (⌥⇧R), faça o procedimento, Parar. A gravação vai para
+             Documentos/StepByStep e o editor abre para importar.
+
+          A cada versão nova o macOS pode pedir as permissões de novo (o app não é
+          assinado por uma conta de desenvolvedor Apple).
+          TXT
+          ditto -c -k --sequesterRsrc --keepParent build/StepByStep "build/${{ steps.versao.outputs.zip }}"
+          ls -la build
+
+      - name: Artefato do run
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.versao.outputs.zip }}
+          path: packages/mac/build/${{ steps.versao.outputs.zip }}
+          if-no-files-found: error
+
+      - name: Publicar na release mac-latest (só main)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > build/notas.md <<NOTAS
+          Última versão do app de captura para Mac (build ${GITHUB_RUN_NUMBER}, commit ${GITHUB_SHA::7}).
+
+          Baixe **${{ steps.versao.outputs.zip }}**, descompacte e siga o LEIA-ME.txt:
+          arraste para Aplicativos, abra, e em Ajustes › Privacidade e Segurança clique em
+          "Abrir Mesmo Assim"; depois libere Acessibilidade e Gravação de Tela e reabra o app.
+          NOTAS
+          gh release delete mac-latest --cleanup-tag --yes || true
+          gh release create mac-latest "build/${{ steps.versao.outputs.zip }}" \
+            --target "$GITHUB_SHA" --title "StepByStep para Mac (última versão)" --notes-file build/notas.md

@@ -8,10 +8,14 @@ cd "$(dirname "$0")/.."
 
 IDENTIDADE="${IDENTIDADE:-StepByStep Dev}"
 APP="build/StepByStep.app"
+# ARCHS="arm64 x86_64" gera binário universal (Apple Silicon + Intel), como faz o workflow "App Mac".
+# Vazio = só a arquitetura desta máquina.
+FLAGS=(-c release)
+for arch in ${ARCHS:-}; do FLAGS+=(--arch "$arch"); done
 
 mkdir -p build
-swift build -c release 2>&1 | tee build/build.log
-BIN="$(swift build -c release --show-bin-path)/StepByStep"
+swift build "${FLAGS[@]}" 2>&1 | tee build/build.log
+BIN="$(swift build "${FLAGS[@]}" --show-bin-path)/StepByStep"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
